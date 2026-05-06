@@ -43,3 +43,4 @@ kernel.errors.txt
 .tox/
 coverage/
 htmlcov/
+gemini.md
