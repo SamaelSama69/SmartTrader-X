@@ -1,0 +1,6 @@
+skill_name: debugger
+description: Fixes runtime errors
+rules:
+  - Always show root cause
+  - Provide exact fix
+  - Avoid vague suggestions

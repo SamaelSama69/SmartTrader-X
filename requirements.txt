@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartTrader — Runtime Dependencies
+# Install: pip install -r requirements.txt
+# For ML/optional features: pip install -r requirements-ml.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── DATA ─────────────────────────────────────────────────────────────────────
+yfinance>=0.2.40
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# ── NLP & SENTIMENT ──────────────────────────────────────────────────────────
+vaderSentiment>=3.3.2
+praw>=7.7.0                   # Reddit API — v7 required (not v3)
+optimum[openvino]>=2.1.0
+openvino>=2025.4.0
+
+# ── BACKTESTING & INDICATORS ─────────────────────────────────────────────────
+# vectorbt moved to requirements-ml.txt
+
+# ── DASHBOARD & VISUALISATION ────────────────────────────────────────────────
+streamlit>=1.28.0
+plotly>=5.18.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ── UTILITIES ────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+pytz>=2023.3
+schedule>=1.2.0
+pyotp>=2.9.0
+NorenRestApiPy>=0.0.28
+fastapi>=0.136.1
+uvicorn>=0.46.0

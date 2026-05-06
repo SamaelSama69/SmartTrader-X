@@ -1,0 +1,13 @@
+skill_name: strategy_engine
+description: Builds and evaluates trading strategies
+inputs:
+  - indicators: list
+  - sentiment_weight: float
+outputs:
+  - strategy_logic: string
+  - backtest_results: dict
+  - sharpe_ratio: float
+rules:
+  - Always backtest before suggesting strategy
+  - Include transaction costs
+  - Avoid overfitting

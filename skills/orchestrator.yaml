@@ -1,0 +1,6 @@
+skill_name: orchestrator
+description: Decides which skill to call
+rules:
+  - Never do everything at once
+  - Break tasks into steps
+  - Call one skill at a time

@@ -1,0 +1,14 @@
+skill_name: github_operator
+description: Interacts with GitHub repos for reading editing and debugging
+inputs:
+  - repo_url: string
+  - task: string
+outputs:
+  - files_to_edit: list
+  - diff_patch: string
+  - commands: list
+rules:
+  - Always scan README first
+  - Identify tech stack before modifying
+  - Never rewrite entire repo unless asked
+  - Prefer minimal diffs

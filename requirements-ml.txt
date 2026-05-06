@@ -1,0 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SmartTrader — Optional ML / Heavy Dependencies
+# Install only if you need deep backtesting or ML-based strategies:
+#   pip install -r requirements-ml.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── BACKTESTING (compiled — may fail on some platforms) ──────────────────────
+vectorbt>=0.26.0
+
+# ── ML / DEEP LEARNING ───────────────────────────────────────────────────────
+torch>=2.0.0
+transformers>=4.35.0
+sentence-transformers>=2.2.0
+xgboost>=2.0.0

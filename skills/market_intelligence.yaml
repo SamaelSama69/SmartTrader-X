@@ -1,0 +1,24 @@
+skill_name: market_intelligence
+description: Fetches and combines stock data and sentiment
+inputs:
+  - ticker: string
+  - timeframe: string
+outputs:
+  - price_data: dataframe
+  - sentiment_score: float
+  - signals: list
+data_sources:
+  price:
+    - yfinance
+    - alpha_vantage
+    - NSE API
+  news:
+    - newsapi
+    - google news scraping
+  sentiment:
+    - finbert
+    - huggingface models
+rules:
+  - Always combine numerical and sentiment
+  - Sentiment must be normalized between -1 and 1
+  - Flag conflicting signals

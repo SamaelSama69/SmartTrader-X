@@ -1,0 +1,14 @@
+skill_name: api_builder
+description: Detects missing APIs and guides generation or integration
+inputs:
+  - requirement: string
+  - data_needed: string
+outputs:
+  - api_list: list
+  - setup_steps: list
+  - fallback_sources: list
+rules:
+  - Always prefer existing APIs over building new ones
+  - If API missing generate endpoint schema
+  - Provide exact curl or python example
+  - Include Indian market compatible sources

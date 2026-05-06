@@ -1,0 +1,6 @@
+skill_name: data_pipeline
+description: Ensures all data sources are working
+checks:
+  - API keys valid
+  - rate limits handled
+  - missing data filled

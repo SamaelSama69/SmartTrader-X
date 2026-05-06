@@ -1,0 +1,13 @@
+skill_name: trade_executor
+description: Executes trades with strict risk rules
+inputs:
+  - signal: string
+  - capital: float
+outputs:
+  - position_size: float
+  - stop_loss: float
+  - risk_reward: float
+rules:
+  - Max 2 percent risk per trade
+  - Always define stop loss
+  - Reject trade if risk unclear
