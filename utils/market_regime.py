@@ -4,6 +4,7 @@ Multi-factor regime classifier using NIFTY50, India VIX, and realized volatility
 """
 
 import logging
+import time as _time
 from datetime import datetime, timedelta
 from typing import Dict, Literal
 
@@ -30,20 +31,23 @@ class IndianMarketRegime:
     VIX_LOW = 13
     VIX_HIGH = 20
     VIX_CRISIS = 30
+    _CACHE_TTL = 300  # 5 minutes
 
     def __init__(self):
         self._cached_regime: RegimeType = None
-        self._cache_time: datetime = None
+        self._cached_at: float = 0.0
         self.current_metrics: dict = {}
 
     def get_regime(self, force_refresh: bool = False) -> RegimeType:
-        """Return current market regime. Cached for 30 minutes."""
-        if (not force_refresh
-                and self._cached_regime
-                and self._cache_time
-                and datetime.now() - self._cache_time < timedelta(minutes=30)):
-            return self._cached_regime
+        """Return current market regime. Cached for 5 minutes."""
+        now = _time.time()
+        if force_refresh or self._cached_regime is None or (now - self._cached_at) > self._CACHE_TTL:
+            self._cached_regime = self._compute_regime()
+            self._cached_at = now
+        return self._cached_regime
 
+    def _compute_regime(self) -> RegimeType:
+        """Compute the current market regime from live data."""
         try:
             nifty = yf.Ticker(self.NIFTY).history(period='1y')
             if nifty.empty or len(nifty) < 50:
@@ -88,8 +92,6 @@ class IndianMarketRegime:
                 'volatility': float(vol_20d),
                 'vix': float(india_vix)
             }
-            self._cached_regime = regime
-            self._cache_time = datetime.now()
             return regime
 
         except Exception as e:

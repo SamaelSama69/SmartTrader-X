@@ -3,7 +3,7 @@ Risk Manager - Enforces risk limits across all trading operations
 Reads risk parameters from config and validates every trade
 """
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from datetime import datetime, date, timedelta
 from config import (
     MAX_POSITION_PCT, MAX_DRAWDOWN_PCT, INITIAL_CAPITAL,
@@ -178,25 +178,91 @@ class RiskManager:
                 logger.info("Trading re-enabled after cooldown")
         return self.trading_enabled
 
+    @staticmethod
+    def vix_risk_multiplier(vix: float) -> float:
+        """
+        Scale position size based on India VIX level.
+
+        Thresholds tuned for India VIX (historical range 10–50):
+          < 13  COMPLACENCY — calm markets precede shocks → 0.80x
+          13–20 NORMAL — full conviction                  → 1.00x
+          20–30 FEAR — reduce exposure                    → 0.60x
+          > 30  CRISIS — capital preservation mode         → 0.30x
+        """
+        if vix is None or vix <= 0:
+            return 1.0
+        if vix < 13:
+            return 0.80   # Complacency — slightly cautious
+        if vix <= 20:
+            return 1.00   # Normal
+        if vix <= 30:
+            return 0.60   # Fear
+        return 0.30       # Crisis
+
 
     def size_position_kelly(self, price: float, confidence: float,
                              win_rate: float = 0.55, avg_win: float = 0.10,
-                             avg_loss: float = 0.05) -> int:
+                             avg_loss: float = 0.05,
+                             vix: float = None) -> int:
         """
         Half-Kelly position sizing — scales investment with signal conviction.
         Returns number of shares to buy (capped at MAX_POSITION_PCT).
+        If vix is provided, applies VIX-based risk multiplier.
         """
         import math
         if price is None or math.isnan(price) or price <= 0:
             return 0
         if confidence is None or math.isnan(confidence):
             confidence = 0.0
-            
-        kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / max(avg_win, 1e-9)
-        half_kelly = kelly_f * 0.5 * confidence          # Half-Kelly for safety
+
+        b = avg_win / max(avg_loss, 1e-9)   # b = win/loss ratio
+        kelly_f = (win_rate * b - (1 - win_rate)) / max(b, 1e-9)
+        half_kelly = max(kelly_f, 0.0) * 0.5 * confidence          # Half-Kelly for safety
+        
+        # Apply VIX-based risk multiplier
+        vix_mult = self.vix_risk_multiplier(vix)
+        half_kelly *= vix_mult
+        
         position_pct = min(half_kelly, self.max_position_pct)
         position_pct = max(position_pct, 0.01)            # Minimum 1% position
+        
         shares = int(self.current_capital * position_pct / price)
+        
+        # Minimum Entry for High Conviction setups (Small Account friendly)
+        if shares == 0 and self.current_capital >= price and confidence >= 0.65:
+            shares = 1
+            
+        return shares
+
+    def size_position_dynamic(self, price: float, confidence: float,
+                               perf_stats: dict = None) -> int:
+        """
+        Kelly sizing using ACTUAL performance stats from StrategyPerformanceTracker.
+        Falls back to defaults if no real stats available.
+        perf_stats: dict with keys win_rate, avg_return, avg_loss (from perf_tracker.get_algorithm_stats)
+        """
+        import math
+        if price is None or math.isnan(price) or price <= 0:
+            return 0
+
+        if perf_stats and perf_stats.get('win_rate') and perf_stats.get('avg_return'):
+            win_rate = float(perf_stats['win_rate'])
+            avg_win = float(perf_stats['avg_return']) if perf_stats['avg_return'] > 0 else 0.10
+            avg_loss = float(perf_stats.get('avg_loss', 0.05)) or 0.05
+        else:
+            win_rate, avg_win, avg_loss = 0.55, 0.10, 0.05
+
+        b = avg_win / max(avg_loss, 1e-9)
+        kelly_f = (win_rate * b - (1 - win_rate)) / max(b, 1e-9)
+        half_kelly = max(kelly_f, 0.0) * 0.5 * confidence
+        position_pct = min(half_kelly, self.max_position_pct)
+        position_pct = max(position_pct, 0.01)
+        shares = int(self.current_capital * position_pct / price)
+        
+        # Minimum Entry for High Conviction setups
+        if shares == 0 and self.current_capital >= price and confidence >= 0.65:
+            shares = 1
+            
         return max(shares, 0)
 
     def check_consecutive_losses(self, max_consecutive: int = 3) -> bool:

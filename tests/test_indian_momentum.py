@@ -31,17 +31,19 @@ def test_indian_momentum_strategy_buy_signal(sample_data):
         'Close': bench_prices
     })
     
-    # Manually inject VCP pattern into last 60 days of sample_data to ensure strong buy
-    # Divide last 60 days into 3 windows of 20
-    # Window 1: 10% range
-    # Window 2: 5% range
-    # Window 3: 2% range
-    for i in range(240, 300):
-        if i < 260: range_pct = 0.10
+    # Manually inject VCP pattern into last 80 days of sample_data to ensure strong buy
+    # Flatten prices during VCP to avoid trend-induced depth inflation
+    last_price = sample_data.iloc[219]['Close']
+    last_bench_price = bench_df.iloc[219]['Close']
+    for i in range(220, 300):
+        sample_data.at[i, 'Close'] = last_price
+        bench_df.at[i, 'Close'] = last_bench_price
+        if i < 240: range_pct = 0.15
+        elif i < 260: range_pct = 0.10
         elif i < 280: range_pct = 0.05
         else: range_pct = 0.02
         
-        mid = sample_data.iloc[i]['Close']
+        mid = last_price
         sample_data.at[i, 'High'] = mid * (1 + range_pct)
         sample_data.at[i, 'Low'] = mid * (1 - range_pct)
 

@@ -17,6 +17,7 @@ from config import STOP_LOSS_ATR_MULTIPLIER, TAKE_PROFIT_RR_RATIO
 from utils.multilingual_sentiment import get_sentiment_engine, get_news_aggregator
 from utils.memory_manager import PredictionMemory
 from utils.data_quality import assess_ohlcv_quality
+from utils.indian_indicators import calculate_adx, calculate_bollinger_bands, calculate_supertrend
 
 
 class StockStrategy:
@@ -148,9 +149,9 @@ class StockStrategy:
         current = float(close.iloc[-1])
 
         # --- Moving Averages ---
-        ma_20  = close.rolling(20).mean().iloc[-1]
-        ma_50  = close.rolling(50).mean().iloc[-1]
-        ma_200 = close.rolling(200).mean().iloc[-1] if len(hist) >= 200 else ma_50
+        ma_20  = close.iloc[-20:].mean()
+        ma_50  = close.iloc[-50:].mean()
+        ma_200 = close.iloc[-200:].mean() if len(hist) >= 200 else ma_50
         signals.update({'ma_20': round(ma_20, 2), 'ma_50': round(ma_50, 2), 'ma_200': round(ma_200, 2)})
         # MA signal: handle case when ma_200 == ma_50 (insufficient data)
         if current > ma_20 > ma_50 and (ma_200 is None or current > ma_200):
@@ -184,14 +185,12 @@ class StockStrategy:
                                       macd.iloc[-2] <= signal.iloc[-2])
 
         # --- ADX (NEW) ---
-        from utils.indian_indicators import calculate_adx
         adx = calculate_adx(hist, 14)
         signals['adx']         = round(float(adx.iloc[-1]), 2)
         signals['adx_trend']   = ('STRONG' if signals['adx'] > 25 else
                                    'WEAK'   if signals['adx'] < 20 else 'MODERATE')
 
         # --- Bollinger Bands (NEW) ---
-        from utils.indian_indicators import calculate_bollinger_bands
         bb       = calculate_bollinger_bands(hist)
         signals['bb_upper']    = round(float(bb['upper'].iloc[-1]), 2)
         signals['bb_lower']    = round(float(bb['lower'].iloc[-1]), 2)
@@ -201,7 +200,6 @@ class StockStrategy:
 
         # --- Supertrend ---
         try:
-            from utils.indian_indicators import calculate_supertrend
             st_df = calculate_supertrend(hist, period=10, multiplier=3.0)
             signals['supertrend_signal'] = ('BULLISH' if st_df['supertrend_signal'].iloc[-1] == 1
                                              else 'BEARISH')
@@ -210,7 +208,7 @@ class StockStrategy:
             signals['supertrend_signal'] = 'UNKNOWN'
 
         # --- Volume ---
-        avg_vol = volume.rolling(20).mean().iloc[-1]
+        avg_vol = volume.iloc[-20:].mean()
         cur_vol = float(volume.iloc[-1])
         signals['volume_surge']  = round(cur_vol / avg_vol if avg_vol > 0 else 1, 2)
         signals['volume_signal'] = 'HIGH' if signals['volume_surge'] > 1.5 else 'NORMAL'
@@ -385,10 +383,10 @@ class MomentumBreakoutStrategy:
                     continue
 
                 # 52-week high = rolling max of the prior 252 candles (exclude today)
-                high_52w   = high_s.iloc[:-1].rolling(252).max().iloc[-1]
+                high_52w   = high_s.iloc[-253:-1].max()
                 today_high = high_s.iloc[-1]
                 today_vol  = volume_s.iloc[-1]
-                avg_vol_20 = volume_s.rolling(20).mean().iloc[-1]
+                avg_vol_20 = volume_s.iloc[-20:].mean()
 
                 if avg_vol_20 < self.min_adv:
                     continue   # Skip illiquid stocks
@@ -400,8 +398,8 @@ class MomentumBreakoutStrategy:
 
                 if is_breakout and volume_ratio >= self.min_volume_ratio:
                     # ATR-based stop (14-day)
-                    atr_series = (high_s - close_s.shift(1)).abs().rolling(14).mean()
-                    atr        = atr_series.iloc[-1]
+                    tr = (high_s.iloc[-15:] - close_s.shift(1).iloc[-15:]).abs()
+                    atr = tr.iloc[-14:].mean()
                     entry      = float(close_s.iloc[-1])
                     stop       = round(entry - 2 * atr, 2)
                     target     = round(entry + 4 * atr, 2)  # 2:1 RR minimum

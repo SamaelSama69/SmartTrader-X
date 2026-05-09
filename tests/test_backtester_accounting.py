@@ -21,4 +21,4 @@ def test_compute_metrics_counts_only_closed_trades_for_win_rate():
 def test_backtester_costs_enabled_by_default():
     bt = Backtester(initial_capital=100_000)
     assert bt.include_costs is True
-    assert bt._calculate_transaction_costs(100_000, trade_type="delivery") > 0
+    assert bt._calculate_indian_costs(100_000, trade_type="equity") > 0

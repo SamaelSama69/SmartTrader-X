@@ -17,7 +17,7 @@ try:
     VBT_AVAILABLE = True
 except ImportError:
     VBT_AVAILABLE = False
-    logger.info("vectorbt not installed — using manual indicator calculation")
+    logger.debug("vectorbt not installed — using manual indicator calculation")
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, date
 

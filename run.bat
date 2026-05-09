@@ -1,28 +1,17 @@
 @echo off
-echo Starting SmartTrader Dashboard...
+echo Starting SmartTrader Pro Components...
 echo.
 
-REM Activate virtual environment if it exists
-if exist venv\Scripts\activate (
-    call venv\Scripts\activate
-    echo Virtual environment activated.
-) else (
-    echo Warning: Virtual environment not found. Using system Python.
-)
+echo Launching Sentiment Server...
+start "Sentiment Server" scripts\run_sentiment_server.bat
 
-REM Check if streamlit is installed
-python -c "import streamlit" 2>nul
-if errorlevel 1 (
-    echo Streamlit not found. Installing...
-    pip install streamlit pandas yfinance plotly requests python-dotenv
-)
+echo Launching Autonomous Bot...
+start "AutoBot" scripts\run_autobot.bat
 
-REM Run the dashboard
-echo Starting Streamlit dashboard...
-streamlit run dashboard.py
-if errorlevel 1 (
-    echo Streamlit failed, trying via python module...
-    python -m streamlit run dashboard.py
-)
+echo Launching GUI Dashboard...
+start "Dashboard" scripts\run_gui.bat
 
+echo.
+echo All components have been launched in separate windows!
+echo You can close this window now.
 pause

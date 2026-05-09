@@ -104,15 +104,35 @@ class ShoonyaBroker(NorenApi if NorenApi else object):
         return None
 
     def place_order(self, ticker: str, side: str, quantity: int, 
-                    order_type: str = 'MKT', product: str = 'C') -> Dict:
+                    order_type: str = 'MKT', product: str = 'C', trade_mode: str = 'SWING') -> Dict:
         """
         Place an order.
         side: 'B' or 'S'
         order_type: 'MKT', 'LMT'
         product: 'C' (CNC/Delivery), 'I' (Intraday), 'M' (Margin)
+        trade_mode: 'SWING' or 'INTRADAY' (Overrides product if provided)
         """
         if not self.is_logged_in: 
             return {'success': False, 'error': 'Not logged in'}
+        
+        # Override product based on explicit trade_mode
+        if trade_mode == 'INTRADAY':
+            product = 'I'
+        elif trade_mode == 'SWING':
+            product = 'C'
+
+        # Pre-flight circuit risk check
+        circuit = self._check_circuit_risk(ticker)
+        if circuit.get('circuit_risk'):
+            logger.warning(
+                f"CIRCUIT BREAKER: {ticker} is {circuit['change_pct']:.1f}% from prev close "
+                "(near circuit limit). Order blocked."
+            )
+            return {
+                'success': False,
+                'error': f'Circuit risk: stock is {circuit["change_pct"]:.1f}% from prev close',
+                'circuit_risk': True
+            }
 
         try:
             # Standardize ticker for NSE
@@ -169,3 +189,31 @@ class ShoonyaBroker(NorenApi if NorenApi else object):
         except Exception as e:
             logger.error(f"Error fetching token for {ticker}: {e}")
         return ""
+
+    def _check_circuit_risk(self, ticker: str, exchange: str = 'NSE',
+                            threshold: float = 0.045) -> dict:
+        """Check if stock is near circuit limit (default >4.5% from prev close).
+
+        Returns:
+            dict with 'circuit_risk' bool and optional 'change_pct' float.
+        """
+        if not self.is_logged_in:
+            return {'circuit_risk': False}  # Can't check, allow order
+        try:
+            clean_ticker = ticker.replace('-EQ', '')
+            if not clean_ticker.endswith('-EQ') and exchange == 'NSE':
+                clean_ticker = f"{clean_ticker}-EQ"
+            token = self._get_token(clean_ticker, exchange)
+            if not token:
+                return {'circuit_risk': False}
+            quote = self.get_quotes(exchange=exchange, token=token)
+            if quote:
+                ltp = float(quote.get('lp', 0))
+                prev_close = float(quote.get('c', 0))
+                if prev_close > 0:
+                    change_pct = abs((ltp - prev_close) / prev_close)
+                    if change_pct > threshold:
+                        return {'circuit_risk': True, 'change_pct': change_pct * 100}
+        except Exception as e:
+            logger.error(f"Circuit check error for {ticker}: {e}")
+        return {'circuit_risk': False}

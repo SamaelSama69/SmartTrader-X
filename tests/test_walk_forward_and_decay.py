@@ -1,3 +1,4 @@
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -37,21 +38,37 @@ def test_walk_forward_validator_creates_out_of_sample_folds():
 
 
 def test_decayed_weights_penalize_recent_underperformance():
-    with patch("utils.performance_tracker.PERF_FILE", Path("memory/test_perf_decay.json")):
-        from utils.performance_tracker import StrategyPerformanceTracker
+    """Verify that recent losses reduce the decayed weight below 1.0."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch('config.MEMORY_DIR', Path(tmp)):
+            from utils.performance_tracker import StrategyPerformanceTracker
+            from utils.database import Database
 
-        tracker = StrategyPerformanceTracker()
-        now = datetime.now()
-        tracker.data["MomentumBreakout"] = {
-            "signals": [
-                {"outcome": "WIN", "pnl_pct": 8, "closed_at": (now - timedelta(days=180)).isoformat()},
-                {"outcome": "WIN", "pnl_pct": 6, "closed_at": (now - timedelta(days=150)).isoformat()},
-                {"outcome": "WIN", "pnl_pct": 5, "closed_at": (now - timedelta(days=120)).isoformat()},
-                {"outcome": "LOSS", "pnl_pct": -4, "closed_at": (now - timedelta(days=2)).isoformat()},
-                {"outcome": "LOSS", "pnl_pct": -3, "closed_at": (now - timedelta(days=1)).isoformat()},
-            ],
-            "stats": {},
-        }
+            tracker = StrategyPerformanceTracker()
+            now = datetime.now()
 
-        weights = tracker.get_decayed_algorithm_weights(half_life_days=30, min_closed=5)
-        assert weights["MomentumBreakout"] < 1.0
+            # Insert historical data directly into the SQLite backend
+            # Old wins (180, 150, 120 days ago) — should decay heavily
+            test_data = [
+                ("MomentumBreakout", "BUY", 8.0, "WIN", (now - timedelta(days=180)).isoformat()),
+                ("MomentumBreakout", "BUY", 6.0, "WIN", (now - timedelta(days=150)).isoformat()),
+                ("MomentumBreakout", "BUY", 5.0, "WIN", (now - timedelta(days=120)).isoformat()),
+                # Recent losses (2, 1 days ago) — high decay weight
+                ("MomentumBreakout", "BUY", -4.0, "LOSS", (now - timedelta(days=2)).isoformat()),
+                ("MomentumBreakout", "BUY", -3.0, "LOSS", (now - timedelta(days=1)).isoformat()),
+            ]
+            for algo, signal, pnl, outcome, ts in test_data:
+                tracker.db.record_strategy_trade(algo, signal, pnl, outcome)
+                # Overwrite timestamp to our desired value
+                conn = tracker.db._get_connection()
+                conn.execute(
+                    "UPDATE strategy_performance SET timestamp = ? "
+                    "WHERE algorithm = ? AND pnl_pct = ? AND timestamp != ?",
+                    (ts, algo, pnl, ts)
+                )
+                conn.commit()
+                conn.close()
+
+            weights = tracker.get_decayed_algorithm_weights(half_life_days=30, min_closed=5)
+            assert weights["MomentumBreakout"] < 1.0, \
+                f"Recent losses should push weight below 1.0, got {weights['MomentumBreakout']}"

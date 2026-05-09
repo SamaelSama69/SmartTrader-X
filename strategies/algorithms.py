@@ -26,6 +26,16 @@ try:
 except Exception:
     pass
 
+_INFO_CACHE = {}
+
+def _get_cached_info(ticker: str) -> dict:
+    if ticker not in _INFO_CACHE:
+        try:
+            _INFO_CACHE[ticker] = yf.Ticker(ticker).info
+        except Exception:
+            _INFO_CACHE[ticker] = {}
+    return _INFO_CACHE[ticker]
+
 
 class BaseAlgorithm:
     """Base class for all trading algorithms"""
@@ -60,8 +70,7 @@ class BuffettValueAlgorithm(BaseAlgorithm):
 
     def analyze(self, ticker: str, hist: pd.DataFrame = None) -> Dict:
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
+            info = _get_cached_info(ticker)
 
             # Value metrics
             pe_ratio = info.get('trailingPE', 999)
@@ -106,7 +115,7 @@ class BuffettValueAlgorithm(BaseAlgorithm):
 
             # 5. Long-term price trend (200-day MA)
             if hist is not None and len(hist) >= 200:
-                ma_200 = hist['Close'].rolling(200).mean().iloc[-1]
+                ma_200 = hist['Close'].iloc[-200:].mean()
                 current = hist['Close'].iloc[-1]
                 if current > ma_200:
                     score += 1
@@ -171,8 +180,7 @@ class DalioAllWeatherAlgorithm(BaseAlgorithm):
 
     def analyze(self, ticker: str, hist: pd.DataFrame = None) -> Dict:
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
+            info = _get_cached_info(ticker)
 
             # Look at asset type (stock vs ETF)
             is_etf = info.get('quoteType', '') == 'ETF'
@@ -279,13 +287,16 @@ class BullsAIStyleAlgorithm(BaseAlgorithm):
             if hist.empty or len(hist) < 50:
                 return {'error': 'Insufficient data'}
 
+            # Optimize for backtesting speed
+            hist = hist.tail(250)
+
             score = 0
             signals = []
 
             # 1. Trend confirmation (multiple MAs)
-            ma_20 = hist['Close'].rolling(20).mean().iloc[-1]
-            ma_50 = hist['Close'].rolling(50).mean().iloc[-1]
-            ma_200 = hist['Close'].rolling(200).mean().iloc[-1] if len(hist) >= 200 else ma_50
+            ma_20 = hist['Close'].iloc[-20:].mean()
+            ma_50 = hist['Close'].iloc[-50:].mean()
+            ma_200 = hist['Close'].iloc[-200:].mean() if len(hist) >= 200 else ma_50
 
             current = hist['Close'].iloc[-1]
 
@@ -300,7 +311,7 @@ class BullsAIStyleAlgorithm(BaseAlgorithm):
                 signals.append("Downtrend confirmed")
 
             # 2. Volume confirmation
-            avg_volume = hist['Volume'].rolling(20).mean().iloc[-1]
+            avg_volume = hist['Volume'].iloc[-20:].mean()
             current_volume = hist['Volume'].iloc[-1]
             volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
 
@@ -390,8 +401,7 @@ class WoodDisruptiveGrowthAlgorithm(BaseAlgorithm):
 
     def analyze(self, ticker: str, hist: pd.DataFrame = None) -> Dict:
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
+            info = _get_cached_info(ticker)
 
             score = 0
             signals = []
@@ -567,7 +577,7 @@ class IndianMomentumAlgorithm(BaseAlgorithm):
                     signals.append("Supertrend: Bearish crossover (exit signal)")
 
             # 3. Volume Confirmation (important for Indian markets)
-            avg_volume = hist['Volume'].rolling(20).mean().iloc[-1]
+            avg_volume = hist['Volume'].iloc[-20:].mean()
             current_volume = hist['Volume'].iloc[-1]
             volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
 
@@ -589,24 +599,28 @@ class IndianMomentumAlgorithm(BaseAlgorithm):
                 if cpr.get('cpr_narrow', False):
                     signals.append("Narrow CPR detected (expect big move)")
 
+            # Skip live OI fetch during backtesting to prevent massive delays
+            is_backtest = getattr(self, '_is_backtesting', False)
+
             # 5. Open Interest (OI) Analysis
             oi_data = None  # Initialize to None
-            try:
-                nse_fetcher = self._get_nse_fetcher()
-                oi_data = nse_fetcher.get_nse_fno_oi(ticker)
-                oi_trend = oi_data.get('oi_trend', 'neutral')
-                total_oi = oi_data.get('total_oi', 0)
+            if not is_backtest:
+                try:
+                    nse_fetcher = self._get_nse_fetcher()
+                    oi_data = nse_fetcher.get_nse_fno_oi(ticker)
+                    oi_trend = oi_data.get('oi_trend', 'neutral')
+                    total_oi = oi_data.get('total_oi', 0)
 
-                if oi_trend == 'increasing' and price_up:
-                    score += 2
-                    signals.append(f"OI increasing + price up (strong momentum, OI: {total_oi:,})")
-                elif oi_trend == 'decreasing' and price_down:
-                    score -= 2
-                    signals.append(f"OI decreasing + price down (weak momentum, OI: {total_oi:,})")
-                elif total_oi > 0:
-                    signals.append(f"OI: {total_oi:,} (trend: {oi_trend})")
-            except Exception as oi_error:
-                signals.append(f"OI data unavailable: {str(oi_error)}")
+                    if oi_trend == 'increasing' and price_up:
+                        score += 2
+                        signals.append(f"OI increasing + price up (strong momentum, OI: {total_oi:,})")
+                    elif oi_trend == 'decreasing' and price_down:
+                        score -= 2
+                        signals.append(f"OI decreasing + price down (weak momentum, OI: {total_oi:,})")
+                    elif total_oi > 0:
+                        signals.append(f"OI: {total_oi:,} (trend: {oi_trend})")
+                except Exception as oi_error:
+                    signals.append(f"OI data unavailable: {str(oi_error)}")
 
             # Generate initial signal based on technical indicators
             if score >= 4:
@@ -712,7 +726,15 @@ class SectorRotationAlgorithm(BaseAlgorithm):
         try:
             from strategies.stocks import SectorRotationStrategy
             impl = SectorRotationStrategy()
-            top_sectors = impl.recommend_sectors()
+            
+            # Cache sector recommendations during backtesting to avoid massive network calls
+            is_backtest = getattr(self, '_is_backtesting', False)
+            if is_backtest:
+                if not hasattr(self, '_cached_top_sectors'):
+                    self._cached_top_sectors = impl.recommend_sectors()
+                top_sectors = self._cached_top_sectors
+            else:
+                top_sectors = impl.recommend_sectors()
             # Simple sector mapping for NSE tickers
             sector_map = {
                 'TCS.NS': 'IT', 'INFY.NS': 'IT', 'HCLTECH.NS': 'IT', 'WIPRO.NS': 'IT',
@@ -751,7 +773,7 @@ class MeanReversionBBAlgorithm(BaseAlgorithm):
                 hist = yf.Ticker(ticker).history(period='3mo')
             if hist is None or len(hist) < 25:
                 return {'error': 'Insufficient data'}
-            close = hist['Close']
+            close = hist['Close'].tail(100)
             sma20 = close.rolling(20).mean()
             std20 = close.rolling(20).std()
             bb_upper = sma20 + 2 * std20
@@ -873,6 +895,19 @@ class NiftyOptionsWriter(BaseAlgorithm):
                     'confidence': 0.0,
                     'score': 0,
                     'signals': ['Not expiry day (Thursday)'],
+                    'strategy_type': 'credit_spread'
+                }
+
+            # Skip live F&O analysis during backtesting (options chains are not historical in yfinance)
+            is_backtest = getattr(self, '_is_backtesting', False)
+
+            if is_backtest:
+                return {
+                    'algorithm': self.name,
+                    'signal': 'HOLD',
+                    'confidence': 0.0,
+                    'score': 0,
+                    'signals': ['Historical options chain data not available for backtesting'],
                     'strategy_type': 'credit_spread'
                 }
 

@@ -47,15 +47,10 @@ class PredictionMemory:
         return [p for p in past if p['prediction'].get('signal') == signal_type]
 
     def record_outcome(self, prediction_id: str, actual_outcome: Dict):
-        """Record the actual outcome of a prediction in SQLite"""
-        # This implementation requires adding record_outcome to Database class
-        # For now, we'll simplify and update the prediction entry
-        all_preds = self.db.get_predictions()
-        for p in all_preds:
-            if p['id'] == prediction_id:
-                p['outcome_recorded'] = True
-                self.db.save_prediction(p)
-                break
+        """Record the actual outcome of a prediction via targeted UPDATE."""
+        if not prediction_id:
+            return
+        self.db.record_outcome(prediction_id, actual_outcome)
 
     def get_prediction_accuracy(self, ticker: str = None, days: int = 90) -> Dict:
         """Calculate prediction accuracy from past outcomes in SQLite"""

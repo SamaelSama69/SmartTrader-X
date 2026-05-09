@@ -1,118 +1,131 @@
-# SmartTrader - AI-Powered Trading Analysis System
+# SmartTrader Pro 🇮🇳
 
-![Indian Markets Supported](https://img.shields.io/badge/Indian%20Markets-NSE%2FBSE%20Supported-green)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A comprehensive trading analysis system that combines sentiment analysis, technical indicators, and machine learning to identify profitable trading opportunities across stocks, options, and futures. Supports global markets and Indian markets (NSE/BSE) with Shoonya (Finvasia) broker integration.
+**SmartTrader Pro** is an autonomous, production-grade algorithmic trading platform specifically hardened for the Indian Equity Markets (NSE/BSE).
 
-## Features
+Powered by advanced regime-aware momentum strategies, dynamic position sizing (Kelly Criterion), and multi-tiered sentiment analysis, SmartTrader Pro seamlessly moves from research to real-time execution via the Shoonya API.
 
-- **Multi-Source Sentiment Analysis**: News, social media (Reddit), and market sentiment
-- **Smart Stock Screener**: Identifies top opportunities to focus compute on few promising companies
-- **Persistent Memory System**: Records all predictions and outcomes for continuous learning
-- **Backtesting Engine**: Test strategies against historical data
-- **Options Analysis**: Options flow, unusual activity, and strategy Recommendations
-- **Futures Analysis**: Commodities, indices, and futures spread analysis
-- **Free Data Sources**: Uses yfinance, News API, Reddit API, Finnhub (free tiers)
+---
 
-## Quick Start
+## 🚀 Features
 
-### Global Markets
-```bash
-cd SmartTrader
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
+*   **Regime-Aware Trading:** Automatically adapts trading parameters based on current market conditions (Bull/Bear, High/Low Volatility) using standard deviation and moving average metrics.
+*   **Dynamic Risk Management:** Automatically calculates position sizes using a robust Dynamic Kelly Criterion implementation.
+*   **Circuit Breaker Protection:** Incorporates mandatory pre-flight circuit breaker checks, preventing order placements if a stock is trading within 0.5% of its circuit limits.
+*   **Sentiment Failover Engine:** Tri-layer NLP sentiment analysis pipeline using News API, local FinBERT, and keyword fallback parsing.
+*   **Earnings & Holiday Safety:** Detects NSE trading holidays and automatically scales down position sizes by 20% during earnings seasons to protect against unpredictable gap volatility.
+*   **Fully Autonomous AutoBot:** A background trading engine that manages entry/exit conditions, performs EOD square-offs by 3:15 PM IST for intraday strategies, and continuously monitors live portfolio PnL.
+*   **Interactive Dashboard:** A responsive Streamlit-based UI that provides a live Strategy Scanner, Backtesting Lab, and real-time Shoonya order tracking.
 
-# Configure your API keys in config.py or .env file
-# Free APIs: News API, Reddit API, Finnhub
+---
 
-python main.py --mode screen          # Find top opportunities
-python main.py --mode analyze --ticker AAPL  # Analyze a stock
-python main.py --mode backtest --strategy momentum  # Run backtest
-python main.py --mode watch           # Start live monitoring
-```
+## 📁 Repository Structure
 
-### Quick Start for Indian Users
-```bash
-cd SmartTrader
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install streamlit pandas yfinance plotly requests python-dotenv
+The project has been organized to keep the root directory clean while providing extensive documentation and scripts.
 
-# Configure Shoonya API keys in .env file
-# Get keys from: https://shoonya.com/api-doc
-
-# Run the interactive dashboard
-streamlit run dashboard_v2.py
-# Or via: python -m streamlit run dashboard_v2.py
-```
-
-**Indian Market Hours**: 9:15 AM - 3:30 PM IST (Mon-Fri)
-
-## Documentation
-
-- **[SETUP_GUIDE.md](SETUP_GUIDE.md)**: Step-by-step Windows setup, API keys, troubleshooting
-- **[USAGE.md](USAGE.md)**: Complete usage documentation on:
-  - Setup and configuration
-  - All trading strategies
-  - Options and futures tools
-  - Memory system usage
-  - API keys setup
-  - Backtesting guide
-- **[INDIAN_TRADING_GUIDE.md](INDIAN_TRADING_GUIDE.md)**: Shoonya API setup, Indian market hours, F&O, Thursday expiry, budget day trading
-- **[AUTO_TRADING_GUIDE.md](AUTO_TRADING_GUIDE.md)**: One-click trading, risk management, broker connections, safety features
-
-## Project Structure
-
-```
+```text
 SmartTrader/
-├── main.py                 # Main orchestrator
-├── auto_bot.py             # Autonomous trading bot
-├── config.py               # Configuration and API keys
-├── requirements.txt        # Dependencies
-├── data/                  # Historical data storage
-├── models/                # Trained models
-├── output/                # Analysis results and charts
-├── logs/                  # System logs
-├── memory/                # Prediction memory and outcomes
-├── strategies/            # Trading strategy modules
-│   ├── algorithms.py      # Standard algos (Dalio, Buffet, etc.)
-│   ├── indian_momentum.py # Momentum breakout + VCP
-│   ├── stocks.py          # General stock strategies
-│   └── options.py         # Options strategies
-└── utils/
-    ├── data_fetcher.py        # yfinance + NSE data fetching
-    ├── nse_data.py            # NSE live quotes and F&O data
-    ├── multilingual_sentiment.py  # Sentiment (English/Hindi/Hinglish)
-    ├── sentiment_db.py        # Cached sentiment scores (SQLite)
-    ├── screener.py            # SmartScreener — finds top opportunities
-    ├── market_regime.py       # BULL/BEAR/SIDEWAYS/CRISIS detection
-    ├── risk_manager.py        # Position sizing, drawdown limits
-    ├── paper_trade_manager.py # SQLite-backed paper trade P&L tracker
-    ├── shoonya_broker.py      # Shoonya live order execution
-    ├── memory_manager.py      # Prediction memory and outcome tracking
-    ├── backtester.py          # Historical strategy testing
-    ├── performance_tracker.py # Strategy win/loss tracking
-    ├── indian_indicators.py   # VWAP, SuperTrend, CPR, expiry helpers
-    ├── lifecycle_manager.py   # Stock lifecycle stage prediction
-    ├── walk_forward.py        # Walk-forward validation (anti-overfit)
-    ├── notifier.py            # Telegram / email alerts
-    └── sebi_compliance.py     # SEBI algo trading compliance checks
+├── docs/                      # Comprehensive Guides & Documentation
+│   ├── AUTO_TRADING_GUIDE.md  # AutoBot configuration and operations
+│   ├── BEGINNER_API_SETUP.md  # How to obtain API keys (Shoonya, News, etc.)
+│   ├── COMPREHENSIVE_GUIDE.md # Deep dive into the architecture
+│   ├── EXAMPLES.md            # Strategy code examples
+│   └── INDIAN_TRADING_GUIDE.md# Indian Market specific rules (STT, Slippage)
+├── scripts/                   # Helper scripts
+│   ├── run_autobot.bat        # Launch the autonomous bot
+│   ├── run_gui.bat            # Launch the Streamlit dashboard
+│   └── run_sentiment_server.bat # Launch local FinBERT server
+├── strategies/                # Core trading algorithms
+├── utils/                     # Modules: Risk, Broker, Fetchers, Backtester
+├── run.bat                    # Master entry point script
+├── auto_bot.py                # Main headless trading loop
+├── dashboard_v2.py            # Streamlit dashboard interface
+└── config.py                  # Environment config
 ```
 
-## Known Issues
+---
 
-### OpenVINO CISA kernel warnings
-If you see `KERNEL HEADER ERRORS FOUND` in logs, these are benign register warnings from the Intel iGPU compiler when loading FinBERT via OpenVINO. They do not affect results — the model falls back to CPU automatically. To silence them completely, set `OPENVINO_LOG_LEVEL=0` in your `.env`.
+## 🛠️ Quick Start
 
-## Free APIs Used
+### 1. Requirements
 
-- **yfinance**: Stock prices, options chains, fundamentals
-- **News API**: Global news sentiment (free: 100 requests/day)
-- **Reddit API**: Social sentiment from r/wallstreetbets, r/investing
-- **Finnhub**: News and basic sentiment (free: 60 calls/min)
-- **Yahoo Finance Scraping**: Additional market data
+*   **Python 3.10+**
+*   API Keys (Optional but recommended for live trading): Shoonya Broker, NewsAPI, Finnhub.
 
-## Disclaimer
+### 2. Installation
 
-This software is for educational and research purposes. Always do your own research before making investment decisions. Past performance does not guarantee future results.
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/SamaelSama69/SmartTrader-X.git
+cd SmartTrader-X
+
+# Create and activate a virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+
+# Install core and ML dependencies
+pip install -r requirements.txt
+pip install -r requirements-ml.txt
+```
+
+### 3. Configuration
+
+Rename `.env.example` to `.env` and fill in your credentials.
+
+```env
+# Required for Live Execution
+SHOONYA_USER_ID=your_id
+SHOONYA_PASSWORD=your_password
+SHOONYA_TOTP_KEY=your_totp_secret
+SHOONYA_VENDOR_CODE=your_vendor_code
+SHOONYA_API_KEY=your_api_key
+
+# Required for Sentiment
+NEWS_API_KEY=your_news_key
+FINNHUB_API_KEY=your_finnhub_key
+```
+
+### 4. Running the Platform
+
+Use the master script `run.bat` to launch the platform:
+
+```bash
+# Launch the main Streamlit Dashboard
+run.bat
+
+# Alternatively, launch components via the scripts directory:
+scripts\run_gui.bat
+scripts\run_autobot.bat
+scripts\run_sentiment_server.bat
+```
+
+---
+
+## 📚 Documentation
+
+Detailed documentation is available in the `docs/` folder:
+
+*   [Beginner API Setup](docs/BEGINNER_API_SETUP.md) — Step-by-step API integration.
+*   [Indian Market Guide](docs/INDIAN_TRADING_GUIDE.md) — Slippage modeling, STT, and costs.
+*   [Auto-Trading Guide](docs/AUTO_TRADING_GUIDE.md) — Operating the headless AutoBot.
+*   [System Architecture](docs/COMPREHENSIVE_GUIDE.md) — Complete overview of engine logic.
+
+---
+
+## 🧪 Testing
+
+The repository maintains an extensive test suite ensuring mission-critical paths (circuit breakers, regime logic, dynamic Kelly) are stable.
+
+```bash
+# Run all tests
+pytest tests/ -v
+```
+
+---
+
+## 🛡️ Disclaimer
+**For Educational and Research Purposes Only.**
+Algorithmic trading involves significant risk. The authors and contributors are not responsible for any financial losses incurred through the use of this software. Always test strategies thoroughly in the **Testing Lab** before deploying live capital.

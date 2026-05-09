@@ -175,7 +175,7 @@ def test_momentum_breakout_structure():
 # ── Phase 5: PerformanceTracker weight range ─────────────────────────────────
 def test_performance_tracker_weights():
     with tempfile.TemporaryDirectory() as tmp:
-        with patch('utils.performance_tracker.PERF_FILE', Path(tmp) / 'perf.json'):
+        with patch('config.MEMORY_DIR', Path(tmp)):
             from utils.performance_tracker import StrategyPerformanceTracker
             tracker = StrategyPerformanceTracker()
             weights = tracker.get_algorithm_weights()

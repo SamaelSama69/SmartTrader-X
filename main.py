@@ -50,15 +50,16 @@ logger = logging.getLogger(__name__)
 class SmartTrader:
     """Main trading system orchestrator - Indian Market (NSE/BSE)"""
 
-    def __init__(self):
+    def __init__(self, regime_detector=None, perf_tracker=None, memory=None):
         self.market = 'IN'
 
         self.data_fetcher = MarketDataFetcher()
         self.sentiment_engine = get_sentiment_engine()
         self.news_aggregator = get_news_aggregator()
         self.screener = SmartScreener()
-        self.memory = PredictionMemory()
-        self.memory.auto_verify_outcomes()
+        self.memory = memory or PredictionMemory()
+        if not memory:
+            self.memory.auto_verify_outcomes()
         self.market_context = MarketContextMemory()
 
         self.paper_trade_manager = PaperTradeManager()
@@ -70,7 +71,7 @@ class SmartTrader:
         self.breakout_strategy = MomentumBreakoutStrategy()
         self.sector_rotation   = SectorRotationStrategy()
         self.orb_strategy      = OpeningRangeBreakout()
-        self.perf_tracker      = StrategyPerformanceTracker()
+        self.perf_tracker      = perf_tracker or StrategyPerformanceTracker()
         self.options_analyzer = OptionsAnalyzer()
 
         self.nse_fetcher = NSEDataFetcher()
@@ -79,11 +80,10 @@ class SmartTrader:
         self.risk_manager = RiskManager(initial_capital=100000.0)
         self.notifier = Notifier()
         self.shoonya = ShoonyaBroker()
-        self.news_aggregator = get_news_aggregator()
         self.auto_trade = False
         self.paper_trade = True
 
-        self.regime_detector = IndianMarketRegime()
+        self.regime_detector = regime_detector or IndianMarketRegime()
 
         kill_file = Path('kill_switch.active')
         if kill_file.exists():
@@ -146,14 +146,27 @@ class SmartTrader:
             with open(cache_file, 'wb') as f:
                 pickle.dump(batch_data, f)
 
+        # At the top of screen_indian_opportunities(), before the results loop, add:
+        current_regime = self.regime_detector.get_regime()
+        preferred_strategies = self.regime_detector.get_preferred_strategies(current_regime)
+        primary_strategy = preferred_strategies[0] if preferred_strategies else 'stock_strategy'
+
         results = []
         for ticker in universe:
             try:
                 if ticker in batch_data.columns.get_level_values(0):
                     hist = batch_data[ticker].dropna()
                     if len(hist) >= 50:
-                        analysis = self.analyze_ticker(ticker, detailed=False, visualize=False)
-                        if 'error' not in analysis and analysis.get('signal') in ('BUY', 'SELL', 'SHORT'):
+                        analysis = self._run_regime_strategy(
+                            strategy_id=primary_strategy,
+                            ticker=ticker,
+                            detailed=False,
+                            regime=current_regime,
+                        )
+                        if 'error' in analysis:
+                            logger.debug(f"  Skipped {ticker}: {analysis['error']}")
+                            continue
+                        if analysis.get('signal') in ('BUY', 'SELL', 'SHORT'):
                             results.append({
                                 'ticker': ticker,
                                 'signal': analysis['signal'],
@@ -326,19 +339,6 @@ class SmartTrader:
             json.dump(analysis, f, indent=2, default=str)
         logger.info(f"\n  Analysis saved to: {output_file}")
 
-        if analysis.get('signal') == 'BUY' and 'current_price' in analysis:
-            logger.info(f"\n  [LIFECYCLE] Creating full trade prediction...")
-            try:
-                lifecycle_pred = self.lifecycle_manager.create_prediction(
-                    ticker, 'BUY', analysis['current_price'], analysis)
-                logger.info(f"    Prediction ID: {lifecycle_pred['id']}")
-                logger.info(f"    Entry: INR{lifecycle_pred['entry']['price']:.2f}")
-                logger.info(f"    Target: INR{lifecycle_pred['exit_plan']['target_price']:.2f}")
-                logger.info(f"    Stop Loss: INR{lifecycle_pred['exit_plan']['stop_loss']:.2f}")
-                logger.info(f"    Expected Exit: {lifecycle_pred['exit_plan']['target_date']}")
-            except Exception as e:
-                logger.warning(f"    Warning: Could not create lifecycle prediction: {e}")
-
         if visualize:
             self.visualizer.create_summary_dashboard(analysis)
             self.visualizer.plot_price_with_signals(ticker)
@@ -371,17 +371,37 @@ class SmartTrader:
             logger.info(f"\n  Open Positions:")
             logger.info(f"  {'Ticker':<15} {'Signal':<8} {'Entry':<10} {'Price':<10} {'P&L %':<10}")
             logger.info(f"  {'-'*55}")
-            for pos in summary['open_positions']:
+            
+            open_positions = summary['open_positions']
+            tickers_yf = [
+                p['ticker'] if (p['ticker'].endswith('.NS') or p['ticker'].endswith('.BO'))
+                else f"{p['ticker']}.NS"
+                for p in open_positions
+            ]
+            try:
+                batch = yf.download(tickers_yf, period='1d', progress=False,
+                                    auto_adjust=True, group_by='ticker', threads=True)
+                if batch is not None and not batch.empty:
+                    batch = batch.dropna(subset=['Close'])
+            except Exception:
+                batch = None
+
+            for pos in open_positions:
                 ticker = pos['ticker']
-                # Get current price for live P&L
+                yf_ticker = ticker if ticker.endswith('.NS') or ticker.endswith('.BO') else f"{ticker}.NS"
                 try:
-                    yf_ticker = ticker if (ticker.endswith('.NS') or ticker.endswith('.BO')) else f"{ticker}.NS"
-                    current = float(yf.Ticker(yf_ticker).fast_info.get('lastPrice', 0) or 0)
-                    pnl = ((current - pos['entry_price']) / pos['entry_price']) * 100 if pos['signal'] == 'BUY' else ((pos['entry_price'] - current) / pos['entry_price']) * 100
+                    if batch is not None and not batch.empty:
+                        if len(tickers_yf) == 1:
+                            current = float(batch['Close'].iloc[-1])
+                        else:
+                            current = float(batch[yf_ticker]['Close'].iloc[-1])
+                    else:
+                        current = 0.0
                 except Exception:
-                    current = 0
-                    pnl = 0
-                
+                    current = 0.0
+                pnl = ((current - pos['entry_price']) / pos['entry_price']) * 100 \
+                      if pos['signal'] == 'BUY' else \
+                      ((pos['entry_price'] - current) / pos['entry_price']) * 100
                 logger.info(f"  {ticker:<15} {pos['signal']:<8} {pos['entry_price']:<10.2f} {current:<10.2f} {pnl:>+7.2f}%")
         else:
             logger.info("\n  No open positions.")
@@ -402,6 +422,11 @@ class SmartTrader:
         if not price or signal == 'HOLD':
             return
 
+        from config import CONFIDENCE_THRESHOLD
+        if confidence < CONFIDENCE_THRESHOLD and not analysis.get('force_execute'):
+            logger.debug(f"  Skipping {ticker}: confidence {confidence:.1%} < threshold {CONFIDENCE_THRESHOLD:.0%}")
+            return
+
         # 1. Prevent duplicate active trades
         open_tickers = [p['ticker'] for p in self.paper_trade_manager.get_open_positions()]
         if ticker in open_tickers:
@@ -410,6 +435,14 @@ class SmartTrader:
 
         if analysis.get('risk_multiplier', 1.0) <= 0:
             logger.warning(f"  Trade blocked ({ticker}): regime risk multiplier is zero")
+            return
+
+        # ADD IMMEDIATELY AFTER:
+        drawdown_check = self.risk_manager.check_drawdown()
+        if not drawdown_check['allowed']:
+            logger.critical(f"  [RISK] Trade blocked — {drawdown_check['reason']}")
+            self.notifier.send("Drawdown Limit Hit",
+                               drawdown_check['reason'], "CRITICAL")
             return
 
         quality = analysis.get('data_quality')
@@ -427,7 +460,10 @@ class SmartTrader:
                                f"3 consecutive losses — skipping {ticker} {signal}", "WARNING")
             return
 
-        shares = self.risk_manager.size_position_kelly(price, confidence)
+        strategy_used = analysis.get('strategy_used', 'stock_strategy')
+        perf_stats = self.perf_tracker.get_algorithm_stats(strategy_used)
+        shares = self.risk_manager.size_position_dynamic(price, confidence, perf_stats)
+
         if shares <= 0:
             return
 
@@ -478,7 +514,6 @@ class SmartTrader:
                     
                     if order.get('success'):
                         self.risk_manager.record_trade(ticker, shares, price, signal)
-                        self.risk_manager.record_trade_history(ticker, signal, 0.0)
                         self.notifier.notify_order(ticker, signal, price, shares)
                         logger.info(f"  [LIVE] Shoonya Order placed: {signal} {shares}×{ticker} @ INR{price:.2f} (order_id: {order.get('order_id')})")
                     else:
@@ -742,27 +777,19 @@ class SmartTrader:
             logger.error(f"Error: {e}")
             return None
 
-    def run_backtest(self, ticker: str, strategy: str = 'ma_crossover', days: int = 252):
+    def run_backtest(self, ticker: str, strategy: str = 'indian_momentum', days: int = 252):
         ticker = self.normalize_ticker(ticker)
         logger.info(f"[BACKTEST] Running backtest for {ticker}...")
 
         start_date = (datetime.now() - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
         end_date = datetime.now().strftime('%Y-%m-%d')
 
-        if strategy == 'dalio_all_weather':
-            logger.error("DalioAllWeather strategy is not available for Indian markets (NSE/BSE)")
-            return
-        elif strategy in ('indian_momentum', 'bulls_ai_momentum', 'buffett_value',
-                          'dalio_all_weather', 'nifty_options_writer'):
-            selector = AlgorithmSelector(market='IN')
-            algo = selector.algorithms.get(strategy)
-            if algo is None:
-                result = {'error': f"Unknown algorithm strategy: {strategy}"}
-            else:
-                result = self.backtester.backtest_algorithm(algo, ticker, start_date, end_date)
-        else:
-            logger.error(f"Unknown strategy: {strategy}")
+        selector = AlgorithmSelector(market='IN')
+        algo = selector.algorithms.get(strategy)
+        if algo is None:
+            logger.error(f"Strategy '{strategy}' not found in AlgorithmSelector.")
             return None
+        result = self.backtester.backtest_algorithm(algo, ticker, start_date, end_date)
 
         if 'error' in result:
             logger.error(f"  Error: {result['error']}")
@@ -826,16 +853,20 @@ class SmartTrader:
 
 def kill_switch():
     from utils.notifier import Notifier
-    from utils.risk_manager import RiskManager
+    from pathlib import Path
+    from datetime import datetime
+
+    kill_file = Path('kill_switch.active')
+    kill_file.write_text(f"activated at {datetime.now().isoformat()}")
 
     notifier = Notifier()
     notifier.notify_killswitch()
 
-    from pathlib import Path
-    kill_file = Path('kill_switch.active')
-    kill_file.touch()
-    print("KILL-SWITCH ACTIVATED - All trading disabled")
-    return {'status': 'disabled'}
+    msg = f"\n{'!'*60}\nKILL-SWITCH ACTIVATED at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nAll trading is DISABLED.\nTo re-enable: delete the file 'kill_switch.active'\n{'!'*60}\n"
+    print(msg)
+    import logging
+    logging.getLogger(__name__).critical(msg)
+    return {'status': 'disabled', 'activated_at': datetime.now().isoformat()}
 
 
 def main():
@@ -845,10 +876,10 @@ def main():
                         help='Operation mode')
     parser.add_argument('--kill-switch', action='store_true', help='Emergency stop')
     parser.add_argument('--ticker', type=str, help='Ticker symbol')
-    parser.add_argument('--strategy', type=str, default='ma_crossover',
-                        choices=['ma_crossover', 'rsi', 'buy_hold', 'compare',
-                                 'indian_momentum', 'bulls_ai_momentum', 'buffett_value', 'dalio_all_weather', 'nifty_options_writer'],
-                        help='Backtest strategy')
+    parser.add_argument('--strategy', type=str, default='indian_momentum',  # sane Indian default
+                        choices=['indian_momentum', 'bulls_ai_momentum', 'buffett_value',
+                                 'dalio_all_weather', 'nifty_options_writer'],
+                        help='Backtest strategy (Indian market strategies only)')
     parser.add_argument('--days', type=int, default=252, help='Backtest period')
     parser.add_argument('--train-bars', type=int, default=180, help='Walk-forward training bars')
     parser.add_argument('--test-bars', type=int, default=60, help='Walk-forward test bars')

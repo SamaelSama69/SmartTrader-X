@@ -214,19 +214,53 @@ class MultilingualSentimentEngine:
         }
 
     def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:
-        """Batch analysis via centralized server."""
+        """Batch analysis with resilient failover:
+        1. Try remote sentiment server
+        2. Fallback to local FinBERT model
+        3. Fallback to keyword-only context analysis
+        """
         if not texts: return []
         
-        try:
-            resp = requests.post(self.server_url, json={"texts": texts}, timeout=30)
-            if resp.status_code == 200:
-                batch_results = resp.json()['results']
-            else:
-                logger.warning(f"Sentiment Server error ({resp.status_code}): {resp.text}")
-                batch_results = [(0.0, 0.0)] * len(texts)
-        except Exception as e:
-            logger.error(f"Failed to connect to Sentiment Server: {e}")
-            batch_results = [(0.0, 0.0)] * len(texts)
+        batch_results = None
+        
+        # Tier 1: Remote sentiment server
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(self.server_url, json={"texts": texts}, timeout=30)
+                if resp.status_code == 200:
+                    batch_results = resp.json()['results']
+                    logger.debug(f"Sentiment: using remote server (attempt {attempt+1})")
+                    break
+                else:
+                    logger.warning(f"Sentiment server returned status {resp.status_code}")
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt == max_retries - 1:
+                    logger.warning(f"Sentiment server unreachable after {max_retries} attempts: {e}")
+                else:
+                    time.sleep(1) # Short wait before retry
+            except Exception as e:
+                logger.warning(f"Unexpected sentiment server error: {e}")
+                break
+        
+        # Tier 2: Local FinBERT model
+        if batch_results is None:
+            try:
+                if not hasattr(self, '_local_analyzer'):
+                    self._local_analyzer = AdvancedTransformerAnalyzer()
+                if self._local_analyzer.model is not None or self._local_analyzer.ov_model is not None:
+                    batch_results = self._local_analyzer.analyze_batch(texts)
+                    logger.info("Sentiment: using local FinBERT fallback")
+            except Exception as e:
+                logger.warning(f"Local FinBERT fallback failed: {e}")
+        
+        # Tier 3: Keyword-only context analysis (always available)
+        if batch_results is None:
+            logger.warning("Sentiment: all model backends unavailable, using keyword-only analysis")
+            batch_results = []
+            for text in texts:
+                ctx_score = self.financial_context.get_context_adjustment(text)
+                batch_results.append((ctx_score, 0.5 if abs(ctx_score) > 0.1 else 0.3))
 
         final_results = []
         for i, text in enumerate(texts):
@@ -254,6 +288,19 @@ class MultilingualSentimentEngine:
         text_lower = text.lower()
         return [t for t, kws in self._topic_keywords.items() if any(kw in text_lower for kw in kws)]
 
+# Source credibility weights for sentiment aggregation.
+# Higher weight = more trusted financial journalism.
+# Unknown/unrecognized sources are penalized.
+SOURCE_CREDIBILITY = {
+    'moneycontrol': 1.4, 'economictimes': 1.3, 'livemint': 1.3,
+    'business-standard': 1.2, 'reuters': 1.5, 'bloomberg': 1.5,
+    'news18': 0.8, 'ndtv': 1.0, 'google': 0.9,  # Google News RSS aggregation
+    'yahoo': 1.0, 'newsapi': 1.0, 'finnhub': 1.1,
+    'cnbctv18': 1.2, 'zeebiz': 0.9, 'thehindubusinessline': 1.1,
+}
+DEFAULT_CREDIBILITY = 0.7  # Unknown sources penalized
+
+
 class IndianNewsAggregator:
     def __init__(self):
         self.sentiment_engine = MultilingualSentimentEngine()
@@ -274,7 +321,7 @@ class IndianNewsAggregator:
     def _fetch_full_article_text(self, url: str) -> str:
         try:
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            resp = requests.get(url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=20)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
                 for s in soup(["script", "style"]): s.decompose()
@@ -327,7 +374,7 @@ class IndianNewsAggregator:
             try:
                 from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
                 url = f"https://newsapi.org/v2/everything?q={quote(search_term)}&from={from_date}&language=en&sortBy=relevancy&apiKey={NEWS_API_KEY}"
-                resp = requests.get(url, timeout=10)
+                resp = requests.get(url, timeout=20)
                 if resp.status_code == 200:
                     for art in resp.json().get('articles', [])[:50]:
                         all_news.append({
@@ -342,7 +389,7 @@ class IndianNewsAggregator:
         if FINNHUB_API_KEY:
             try:
                 url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
-                resp = requests.get(url, timeout=10)
+                resp = requests.get(url, timeout=20)
                 if resp.status_code == 200:
                     for art in resp.json()[:30]:
                         if search_term.lower() in art['headline'].lower() or search_term.lower() == "indian stock market":
@@ -419,17 +466,24 @@ class IndianNewsAggregator:
         return sector_map
 
     def get_aggregate_sentiment_from_news(self, ticker: str, news: List[Dict]) -> Dict:
-        if not news: return {'ticker': ticker, 'aggregate_sentiment': 0.0, 'confidence': 0.0, 'article_count': 0, 'topics': {}, 'topic_links': {}}
+        if not news: return {'ticker': ticker, 'aggregate_sentiment': 0.0, 'confidence': 0.0, 'article_count': 0, 'topics': {}, 'topic_links': {}, 'source_credibility': {}}
         
         weighted_sum = 0.0
         total_weight = 0.0
         topics = {}; topic_links = {}
+        source_cred_used = {}  # Track which credibility was applied
         
         for n in news:
             # sentiments[j] is a SentimentResult object
             res = n['sentiment']
-            weighted_sum += res.sentiment_score * res.confidence
-            total_weight += res.confidence
+            
+            # Apply source credibility weighting
+            source_domain = n.get('source', '').lower().replace('www.', '').split('.')[0]
+            cred = SOURCE_CREDIBILITY.get(source_domain, DEFAULT_CREDIBILITY)
+            weight = res.confidence * cred
+            weighted_sum += res.sentiment_score * weight
+            total_weight += weight
+            source_cred_used[source_domain] = cred
             
             # Use topics already detected by the engine
             for t in res.topics:
@@ -443,7 +497,8 @@ class IndianNewsAggregator:
             'confidence': min(total_weight / len(news), 1.0) if news else 0.0, 
             'article_count': len(news), 
             'topics': topics, 
-            'topic_links': topic_links
+            'topic_links': topic_links,
+            'source_credibility': source_cred_used
         }
     def get_aggregate_sentiment(self, ticker: str, days: int = 7) -> Dict:
         news = self.fetch_news(ticker, days)

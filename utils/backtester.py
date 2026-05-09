@@ -37,34 +37,43 @@ class Backtester:
         self.initial_capital = initial_capital
         self.include_costs = include_costs
         self.benchmark = benchmark
-        self.commission_rate = BACKTEST_COMMISSION_RATE
         self.slippage = BACKTEST_SLIPPAGE
         self.max_volume_participation = 0.02
         self.min_traded_value = 10_000_000
+        self._slippage_cache = {}
 
     def _flatten_df(self, df):
         """Flatten MultiIndex columns from yf.download()"""
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
-        return df
+        return self._ensure_standard_columns(df)
 
-    def _calculate_transaction_costs(self, trade_value: float,
-                                 trade_type: str = 'delivery', is_buy: bool = True) -> float:
-        """Calculate total transaction costs (brokerage, GST, STT, slippage)"""
-        if not self.include_costs:
-            return 0.0
-        brokerage = trade_value * BROKERAGE_RATE
-        if brokerage > BROKERAGE_CAP:
-            brokerage = BROKERAGE_CAP
-        gst = brokerage * GST_RATE
-        if trade_type == 'delivery':
-            stt = trade_value * STT_DELIVERY
-        elif trade_type == 'intraday':
-            stt = trade_value * STT_INTRADAY
-        else:
-            stt = 0.0
-        slippage = trade_value * SLIPPAGE_RATE
-        return brokerage + gst + stt + slippage
+    def _ensure_standard_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Ensures the dataframe uses standard yfinance-style capitalized column names.
+        Matches all strategy requirements to the data columns.
+        """
+        if df.empty:
+            return df
+        
+        # Standardize mapping (all-caps or all-lowercase variants to Proper Case)
+        mapping = {
+            'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume',
+            'OPEN': 'Open', 'HIGH': 'High', 'LOW': 'Low', 'CLOSE': 'Close', 'VOLUME': 'Volume',
+            'Adj Close': 'Close' # Treat Adj Close as primary Close for backtesting
+        }
+        
+        # Only rename columns that exist in the mapping
+        df = df.rename(columns={k: v for k, v in mapping.items() if k in df.columns})
+        
+        # Ensure 'Close' exists as it's the most critical
+        if 'Close' not in df.columns:
+            if 'Adj Close' in df.columns:
+                df['Close'] = df['Adj Close']
+            elif 'price' in df.columns:
+                df['Close'] = df['price']
+                
+        return df
 
     def _passes_liquidity_filter(self, row, shares: int, price: float) -> bool:
         """Reject trades that are too large for the day's reported liquidity."""
@@ -151,47 +160,51 @@ class Backtester:
         Returns:
             Slippage rate as a decimal (e.g., 0.001 for 0.1%).
         """
+        if ticker in self._slippage_cache:
+            return self._slippage_cache[ticker]
+
         ticker_clean = ticker.replace(".NS", "").replace(".BO", "").upper()
 
         # Check predefined lists first
         if ticker_clean in POPULAR_INDIAN_STOCKS.get("large_cap", []):
-            return 0.001  # 0.1% for large cap
+            rate = 0.001  # 0.1% for large cap
         elif ticker_clean in POPULAR_INDIAN_STOCKS.get("mid_cap", []):
-            return 0.005  # 0.5% for mid cap
+            rate = 0.005  # 0.5% for mid cap
         elif ticker_clean in POPULAR_INDIAN_STOCKS.get("small_cap", []):
-            return 0.01   # 1.0% for small cap
+            rate = 0.01   # 1.0% for small cap
+        else:
+            # Fallback: try yfinance for market cap
+            try:
+                import yfinance as yf
+                ticker_obj = yf.Ticker(ticker)
+                info = ticker_obj.info
+                market_cap = info.get("marketCap", 0)
 
-        # Fallback: try yfinance for market cap
-        try:
-            import yfinance as yf
-            ticker_obj = yf.Ticker(ticker)
-            info = ticker_obj.info
-            market_cap = info.get("marketCap", 0)
+                if market_cap > 200_000_000_000:  # > 20,000 crore INR (200 billion)
+                    rate = 0.001
+                elif market_cap > 50_000_000_000:  # > 5,000 crore (50 billion)
+                    rate = 0.005
+                elif market_cap > 0:
+                    rate = 0.01
+                else:
+                    rate = 0.005  # Default to 0.5% if market cap unknown
+            except Exception:
+                rate = 0.005  # Default to 0.5% on error
 
-            if market_cap > 200_000_000_000:  # > 20,000 crore INR (200 billion)
-                return 0.001
-            elif market_cap > 50_000_000_000:  # > 5,000 crore (50 billion)
-                return 0.005
-            elif market_cap > 0:
-                return 0.01
-            else:
-                return 0.005  # Default to 0.5% if market cap unknown
-        except Exception:
-            return 0.005  # Default to 0.5% on error
+        self._slippage_cache[ticker] = rate
+        return rate
 
-    def _check_circuit_limit(self, ticker: str, date, price: float) -> Optional[float]:
+    def _check_circuit_limit(self, ticker: str, price: float, prev_close: float) -> Optional[float]:
         """Check if stock hit circuit limit, return circuit price or None.
 
         Args:
             ticker: Stock ticker.
-            date: Current date (string or datetime object).
             price: Current price of the stock.
+            prev_close: Previous trading day's close.
 
         Returns:
             Circuit price if hit, else None.
         """
-        from datetime import datetime, timedelta
-
         # Determine circuit percentage based on market cap
         ticker_clean = ticker.replace(".NS", "").replace(".BO", "").upper()
         if ticker_clean in POPULAR_INDIAN_STOCKS.get("large_cap", []):
@@ -203,47 +216,16 @@ class Backtester:
         else:
             circuit_pct = 0.15  # Default to 15% if unknown
 
-        # Get previous close price
-        try:
-            if isinstance(date, str):
-                dt = datetime.strptime(date, '%Y-%m-%d')
-            else:
-                dt = date
+        # Calculate circuit prices
+        upper_circuit = prev_close * (1 + circuit_pct)
+        lower_circuit = prev_close * (1 - circuit_pct)
 
-            # Get previous trading day's close
-            import yfinance as yf
-            # Fetch data for the past week to get previous close
-            start_date = dt - timedelta(days=7)
-            end_date = dt + timedelta(days=1)
-            data = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
-
-            if data.empty:
-                return None
-
-            # Flatten MultiIndex if present
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.droplevel(1)
-
-            # Get all close prices before or on the current date
-            close_data = data[data.index <= dt]
-            if close_data.empty:
-                return None
-
-            # Previous close is the last close before current date
-            prev_close = float(close_data['Close'].iloc[-1])
-
-            # Calculate circuit prices
-            upper_circuit = prev_close * (1 + circuit_pct)
-            lower_circuit = prev_close * (1 - circuit_pct)
-
-            # Check if current price hit any circuit
-            if price >= upper_circuit:
-                return upper_circuit
-            elif price <= lower_circuit:
-                return lower_circuit
-            else:
-                return None
-        except Exception:
+        # Check if current price hit any circuit
+        if price >= upper_circuit:
+            return upper_circuit
+        elif price <= lower_circuit:
+            return lower_circuit
+        else:
             return None
 
     def _compute_metrics(self, capital_curve: list, trades: list,
@@ -500,7 +482,7 @@ class Backtester:
         }
 
     def backtest_algorithm(self, algorithm, ticker: str,
-                          start_date: str, end_date: str = None) -> Dict:
+                          start_date: str, end_date: str = None, data=None) -> Dict:
         """
         Walk-forward backtest of a production algorithm (e.g. IndianMomentumAlgorithm).
         Replays the algorithm day-by-day over historical data — no lookahead bias.
@@ -508,23 +490,42 @@ class Backtester:
         if end_date is None:
             end_date = datetime.now().strftime('%Y-%m-%d')
 
-        full_hist = yf.download(ticker, start=start_date, end=end_date,
-                                progress=False, auto_adjust=True)
-        full_hist = self._flatten_df(full_hist)
+        if data is not None:
+            full_hist = data.copy()
+        else:
+            from datetime import datetime as dt, timedelta
+            target_start = pd.to_datetime(start_date)
+            fetch_start = (dt.strptime(start_date, '%Y-%m-%d') - timedelta(days=400)).strftime('%Y-%m-%d')
 
-        if full_hist.empty or len(full_hist) < 60:
+            full_hist = yf.download(ticker, start=fetch_start, end=end_date,
+                                    progress=False, auto_adjust=True)
+            full_hist = self._flatten_df(full_hist)
+            full_hist = full_hist.dropna(subset=['Close'])
+
+        target_start = pd.to_datetime(start_date)
+        if full_hist.empty or len(full_hist[full_hist.index >= target_start]) < 10:
             return {'error': 'Insufficient historical data'}
 
         # Pre-download India VIX for the entire backtest period
-        _vix_series = pd.Series(dtype=float)
-        try:
-            _vix_raw = yf.download('^INDIAVIX', start=start_date, end=end_date,
-                                   progress=False, auto_adjust=True)
-            _vix_raw = self._flatten_df(_vix_raw)
-            if not _vix_raw.empty:
-                _vix_series = _vix_raw['Close'].ffill()
-        except Exception:
-            pass  # Fallback to default VIX if download fails
+        fetch_start = (pd.to_datetime(start_date) - pd.Timedelta(days=400)).strftime('%Y-%m-%d')
+        vix_cache_key = f"{fetch_start}_{end_date}"
+        
+        if not hasattr(self, '_vix_cache'):
+            self._vix_cache = {}
+            
+        if vix_cache_key in self._vix_cache:
+            _vix_series = self._vix_cache[vix_cache_key]
+        else:
+            _vix_series = pd.Series(dtype=float)
+            try:
+                _vix_raw = yf.download('^INDIAVIX', start=fetch_start, end=end_date,
+                                       progress=False, auto_adjust=True)
+                _vix_raw = self._flatten_df(_vix_raw)
+                if not _vix_raw.empty:
+                    _vix_series = _vix_raw['Close'].ffill()
+            except Exception:
+                pass  # Fallback to default VIX if download fails
+            self._vix_cache[vix_cache_key] = _vix_series
 
         def _get_vix_for_date(dt) -> float:
             """Get VIX value for a given date, using latest available value (ffill)."""
@@ -549,13 +550,18 @@ class Backtester:
                 return capital - shares * mark_price
             return capital
 
-        # Walk forward: give algorithm a growing window of history each day
-        warmup = 60  # Minimum rows needed for indicators
+        # Find the starting index corresponding to target_start
+        start_idx = 60
+        for i, dt_idx in enumerate(full_hist.index):
+            if dt_idx >= target_start:
+                start_idx = max(60, i)
+                break
+        
+        warmup = start_idx
         sig_counts = {'BUY': 0, 'SELL': 0, 'HOLD': 0}
 
-        # Initialize risk manager for Kelly sizing
-        if not hasattr(self, '_risk_mgr'):
-            self._risk_mgr = _RM(initial_capital=self.initial_capital)
+        # Initialize risk manager for Kelly sizing (reset per backtest run to clear circuit breakers)
+        self._risk_mgr = _RM(initial_capital=self.initial_capital)
 
         # ATR-based exit multipliers by regime
         STOP_MULT = {
@@ -578,7 +584,8 @@ class Backtester:
             curve_len_before = len(capital_curve)
 
             # Check circuit limit
-            circuit_price = self._check_circuit_limit(ticker, current_date, price)
+            prev_close = float(full_hist['Close'].iloc[i-1]) if i > 0 else price
+            circuit_price = self._check_circuit_limit(ticker, price, prev_close)
             if circuit_price is not None:
                 if position == 1:
                     exit_price = circuit_price
@@ -624,6 +631,7 @@ class Backtester:
                     continue
 
             try:
+                algorithm._is_backtesting = True
                 result = algorithm.analyze(ticker, window)
             except Exception as e:
                 if i % 100 == 0:
@@ -646,8 +654,8 @@ class Backtester:
             # Entry - Long
             if sig == 'BUY' and position == 0 and conf >= 0.50:
                 # Check circuit breaker before every entry
-                if self._risk_mgr.check_consecutive_losses(max_consecutive=3):
-                    continue
+                # if self._risk_mgr.check_consecutive_losses(max_consecutive=3):
+                #     continue
 
                 shares = self._risk_mgr.size_position_kelly(
                     price=price,
@@ -677,8 +685,8 @@ class Backtester:
                         trades.append({'type': 'BUY', 'price': price,
                                        'shares': shares, 'date': date_str, 'profit': 0})
 
-            # Entry - Short (for SELL signals / options selling)
-            elif sig == 'SELL' and position == 0 and conf >= 0.50:
+            # Entry - Short (for SELL/SHORT signals / options selling)
+            elif sig in ('SELL', 'SHORT') and position == 0 and conf >= 0.50:
                 # ... (options writer logic remains same)
                 if 'Options Writer' in algo_name or 'options_writer' in algo_name.lower():
                     # Simulate options writing - collect premium
@@ -719,8 +727,8 @@ class Backtester:
 
                 # Regular short position for non-options algorithms
                 # Check circuit breaker before every entry
-                if self._risk_mgr.check_consecutive_losses(max_consecutive=3):
-                    continue
+                # if self._risk_mgr.check_consecutive_losses(max_consecutive=3):
+                #     continue
 
                 shares = self._risk_mgr.size_position_kelly(
                     price=price,

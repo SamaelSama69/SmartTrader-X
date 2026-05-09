@@ -30,15 +30,19 @@ class PortfolioBacktester:
         """
         logger.info(f"Starting Portfolio Backtest for {len(tickers)} tickers from {start_date} to {end_date}")
         
-        # 1. Download all data in one go
-        data = yf.download(tickers, start=start_date, end=end_date, group_by='ticker', auto_adjust=True)
-        bench = yf.download('^NSEI', start=start_date, end=end_date, auto_adjust=True)
+        # 1. Download all data in one go (with extra history for warmup)
+        target_start = pd.to_datetime(start_date)
+        fetch_start = (target_start - timedelta(days=400)).strftime('%Y-%m-%d')
+        
+        data = yf.download(tickers, start=fetch_start, end=end_date, group_by='ticker', auto_adjust=True, progress=False)
+        bench = yf.download('^NSEI', start=fetch_start, end=end_date, auto_adjust=True, progress=False)
         
         if data.empty:
             return {"error": "No data found for the given tickers/dates."}
 
-        # Align all dates
+        # Align all dates but only iterate from target_start
         all_dates = sorted(data.index.unique())
+        test_dates = [d for d in all_dates if d >= target_start]
         
         # State tracking
         portfolio_cash = self.initial_capital
@@ -47,7 +51,7 @@ class PortfolioBacktester:
         trade_log = []
         
         # 2. Daily Simulation Loop
-        for current_date in all_dates:
+        for current_date in test_dates:
             date_str = str(current_date)[:10]
             
             # --- A. Update Mark-to-Market ---
@@ -98,8 +102,8 @@ class PortfolioBacktester:
                 for ticker in tickers:
                     if ticker in open_trades: continue
                     try:
-                        # Extract window up to today
-                        window = data[ticker].loc[:current_date].tail(100)
+                        # Extract window up to today (max 400 days for MAs)
+                        window = data[ticker].loc[:current_date].tail(400)
                         if len(window) < 50: continue
                         
                         # Note: backtest doesn't have live sentiment, usually mocked or neutral
@@ -115,7 +119,15 @@ class PortfolioBacktester:
                     if len(open_trades) >= self.max_positions: break
                     ticker = sig['ticker']
                     res = sig['result']
-                    price = res['current_price']
+                    
+                    # FIX: Use the window's last price as the current simulation price
+                    # to avoid KeyError if the strategy doesn't return it.
+                    price = res.get('current_price')
+                    if price is None:
+                        try:
+                            price = float(data[ticker]['Close'].loc[:current_date].iloc[-1])
+                        except:
+                            continue # Skip if price data is missing
                     
                     # Risk Check
                     shares = self.risk_mgr.size_position_kelly(price, res['confidence'])

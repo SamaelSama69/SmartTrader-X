@@ -63,10 +63,12 @@ def test_manage_positions_closes_on_stop_loss():
             'shares': 5,
         }]
 
-        with patch('auto_bot.yf.Ticker') as mock_ticker:
-            # A proper implementation calls paper_mgr.close_positions()
-            bot.manage_open_positions()
-            bot.paper_mgr.close_positions.assert_called_once()
+        with patch('auto_bot.datetime') as mock_dt:
+            # Set time before EOD square-off to avoid early return
+            mock_dt.now.return_value = datetime(2024, 6, 3, 10, 0)
+            with patch('auto_bot.yf.Ticker') as mock_ticker:
+                bot.manage_open_positions()
+                bot.paper_mgr.close_positions.assert_called_once()
 
 
 # ── find_and_execute_trades ────────────────────────────────────────────────

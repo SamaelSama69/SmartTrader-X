@@ -125,7 +125,7 @@ class WalkForwardValidator:
                 if shares > 0 and self.backtester._passes_liquidity_filter(row, shares, price):
                     entry_price = self.backtester._liquidity_adjusted_price(row, shares, 'BUY')
                     trade_value = shares * entry_price
-                    trade_value += self.backtester._calculate_transaction_costs(trade_value, 'delivery', True)
+                    trade_value += self.backtester._calculate_indian_costs(trade_value, trade_type='equity')
                     if trade_value <= capital:
                         capital -= trade_value
                         position = 1
@@ -142,7 +142,7 @@ class WalkForwardValidator:
                 if should_exit:
                     exit_price = self.backtester._liquidity_adjusted_price(row, shares, 'SELL')
                     trade_value = shares * exit_price
-                    trade_value -= self.backtester._calculate_transaction_costs(trade_value, 'delivery', False)
+                    trade_value -= self.backtester._calculate_indian_costs(trade_value, trade_type='equity')
                     capital += trade_value
                     profit = (exit_price - entry_price) * shares
                     trades.append({

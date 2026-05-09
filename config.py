@@ -126,9 +126,6 @@ def validate_config():
     if BACKTEST_INITIAL_CAPITAL <= 0:
         errors.append(f"BACKTEST_INITIAL_CAPITAL should be positive, got {BACKTEST_INITIAL_CAPITAL}")
 
-    if not (0 <= BACKTEST_COMMISSION_RATE < 1):
-        warnings.append(f"BACKTEST_COMMISSION_RATE seems out of range: {BACKTEST_COMMISSION_RATE}")
-
     if not (0 <= BACKTEST_SLIPPAGE < 1):
         warnings.append(f"BACKTEST_SLIPPAGE seems out of range: {BACKTEST_SLIPPAGE}")
 
@@ -246,7 +243,6 @@ MAX_MEMORY_ENTRIES = 10000
 
 # Backtesting Settings
 BACKTEST_INITIAL_CAPITAL = 100000.0
-BACKTEST_COMMISSION_RATE = 0.001  # Deprecated: use transaction cost model below
 BACKTEST_SLIPPAGE = 0.0005  # 0.05% per trade (Phase1 update)
 # Transaction Cost Model (Phase1)
 BROKERAGE_RATE = 0.0005  # 0.05% of trade value
@@ -293,7 +289,7 @@ STRATEGY_SCREENERS = {
 # Risk Management
 MAX_DRAWDOWN_PCT = 0.20  # 20% max drawdown
 STOP_LOSS_ATR_MULTIPLIER = 2.0
-TAKE_PROFIT_RR_RATIO = 2.0  # 2:1 reward:risk
+TAKE_PROFIT_RR_RATIO = 3.0  # 3:1 reward:risk
 
 # Initialize logging
 logger = setup_logging()

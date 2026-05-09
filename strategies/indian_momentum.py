@@ -99,12 +99,12 @@ class VCPPatternDetector:
                     pass
 
             # Volume Dry-up check: Volume in last 10 days < 50-day Average Volume
-            last_10_vol = df['Volume'].tail(10).mean()
-            avg_vol_50 = df['Volume'].rolling(50).mean().iloc[-1]
+            last_10_vol = df['Volume'].iloc[-10:].mean()
+            avg_vol_50 = df['Volume'].iloc[-50:].mean()
             vol_dryup = last_10_vol < (avg_vol_50 * 0.8) # 20% reduction
 
-            # VCP criteria: at least 2 tightenings (3 windows) and final depth < 10%
-            is_vcp = tightening_count >= 2 and depths[-1] < 0.10
+            # VCP criteria: at least 2 tightenings (3 windows) and final depth < 5%
+            is_vcp = tightening_count >= 2 and depths[-1] < 0.05  # Minervini-spec final tightness
             
             return {
                 'is_vcp': is_vcp,
@@ -167,14 +167,14 @@ class IndianMomentumStrategy:
             result['current_price'] = current_price
 
             # 1. Trend Filter: Price above 200 DMA + EMA 50 > EMA 200
-            sma_200 = df['Close'].rolling(window=200).mean().iloc[-1]
-            ema_50 = df['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
-            ema_200 = df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
+            sma_200 = df['Close'].iloc[-200:].mean()
+            ema_50 = df['Close'].iloc[-150:].ewm(span=50, adjust=False).mean().iloc[-1]
+            ema_200 = df['Close'].iloc[-400:].ewm(span=200, adjust=False).mean().iloc[-1]
             
             is_uptrend = current_price > sma_200 and ema_50 > ema_200
             
             # Trend Intensity (Slope of EMA 50)
-            ema_50_prev = df['Close'].ewm(span=50, adjust=False).mean().iloc[-5]
+            ema_50_prev = df['Close'].iloc[-150:-4].ewm(span=50, adjust=False).mean().iloc[-1]
             trend_intensity = (ema_50 / ema_50_prev - 1) * 100 # % change in 5 days
             
             # 2. Momentum Score
@@ -195,17 +195,18 @@ class IndianMomentumStrategy:
                     rs_score = stock_perf - bench_perf
             
             # 5. Volume Confirmation
-            avg_vol_50 = df['Volume'].rolling(window=50).mean().iloc[-1]
+            avg_vol_50 = df['Volume'].iloc[-50:].mean()
             current_vol = df['Volume'].iloc[-1]
             vol_ratio = current_vol / avg_vol_50 if avg_vol_50 > 0 else 1.0
             
             # 6. ATR-based Stop and Target
             # Simple ATR(14)
-            high_low = df['High'] - df['Low']
-            high_close = np.abs(df['High'] - df['Close'].shift())
-            low_close = np.abs(df['Low'] - df['Close'].shift())
+            recent_df = df.iloc[-15:]
+            high_low = recent_df['High'] - recent_df['Low']
+            high_close = np.abs(recent_df['High'] - recent_df['Close'].shift())
+            low_close = np.abs(recent_df['Low'] - recent_df['Close'].shift())
             tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-            atr = tr.rolling(14).mean().iloc[-1]
+            atr = tr.iloc[-14:].mean()
             
             # 7. Contrarian Intelligence
             # Measures divergence between sentiment and momentum
@@ -292,7 +293,7 @@ class IndianMomentumStrategy:
                         result['reason'] = 'Uptrend with positive momentum and healthy volume'
                         
                     result['stop_loss'] = round(current_price - 2.0 * atr, 2)
-                    result['price_target'] = round(current_price + 4.5 * atr, 2)
+                    result['price_target'] = round(current_price + 6.0 * atr, 2)   # 3:1 R:R
             
             elif not is_uptrend and m_score < -0.5:
                 # SHORT setup (Technical Downtrend)

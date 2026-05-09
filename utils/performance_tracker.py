@@ -1,114 +1,83 @@
 """
-Strategy Performance Attribution
-Tracks P&L per algorithm so the system can dynamically weight winners.
-This is what separates a signal generator from a self-improving system.
-"""
+Strategy Performance Tracker — Realized P&L and Sharpe Ratio per strategy.
+Allows the bot to decay weights of underperforming algorithms.
 
-import json
+Migrated to SQLite backend (utils/database.py) for thread safety.
+The dashboard, bot, and testing engine can all write concurrently without
+race conditions that plagued the old JSON file approach.
+"""
 import logging
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Dict, List
 from pathlib import Path
-from typing import Dict, List, Optional
-from collections import defaultdict
+
+from config import MEMORY_DIR
 
 logger = logging.getLogger(__name__)
 
-PERF_FILE = Path(os.getenv('MEMORY_DIR', 'memory')) / 'strategy_performance.json'
-
 
 class StrategyPerformanceTracker:
-    """
-    Records every signal per algorithm and its eventual outcome.
-    Computes: win rate, avg return, Sharpe per algorithm.
-    Used to dynamically weight algorithms in AlgorithmSelector.
-    """
-
     ALGORITHMS = [
-        'BuffettValue', 'DalioAllWeather', 'CathieWoodGrowth',
-        'BullsAIMomentum', 'IndianMomentum', 'NiftyOptionsWriter',
-        'MomentumBreakout', 'SectorRotation'
+        'IndianMomentum',
+        'MomentumBreakout',
+        'SectorRotation',
+        'OptionsWriting',
+        'BuffettValue',
+        'AllWeather',
+        # Lowercase IDs used by AlgorithmSelector / autobot
+        'indian_momentum',
+        'momentum_breakout',
+        'sector_rotation',
+        'nifty_options_writer',
+        'buffett_value',
+        'bulls_ai_momentum',
+        'mean_reversion',
     ]
 
     def __init__(self):
-        self.perf_file = PERF_FILE
-        self.perf_file.parent.mkdir(parents=True, exist_ok=True)
-        self.data = self._load()
+        from utils.database import Database
+        self.db = Database(db_path=str(MEMORY_DIR / 'smart_trader.db'))
+        self._stats_cache: Dict[str, dict] = {}
 
-    def _load(self) -> Dict:
-        if self.perf_file.exists():
-            try:
-                with open(self.perf_file) as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"Performance file corrupted, resetting: {e}")
-        return {algo: {'signals': [], 'stats': {}} for algo in self.ALGORITHMS}
+    def record_trade_history(self, algorithm: str, signal: str, pnl_pct: float):
+        """Record the outcome of a trade signal (thread-safe via SQLite)."""
+        outcome = 'WIN' if pnl_pct > 0 else 'LOSS'
+        self.db.record_strategy_trade(algorithm, signal, pnl_pct, outcome)
+        # Invalidate cached stats for this algorithm
+        self._stats_cache.pop(algorithm, None)
 
-    def _save(self):
-        try:
-            with open(self.perf_file, 'w') as f:
-                json.dump(self.data, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Failed to save performance data: {e}")
-
-    def record_signal(self, algorithm: str, ticker: str, signal: str,
-                      confidence: float, entry_price: float):
-        """Record a new BUY/SELL signal from an algorithm."""
-        if algorithm not in self.data:
-            self.data[algorithm] = {'signals': [], 'stats': {}}
-
-        record = {
-            'id':          f"{algorithm}_{ticker}_{datetime.now():%Y%m%d_%H%M%S}",
-            'ticker':      ticker,
-            'signal':      signal,
-            'confidence':  confidence,
-            'entry_price': entry_price,
-            'timestamp':   datetime.now().isoformat(),
-            'outcome':     None,   # Filled in by record_outcome()
-            'pnl_pct':     None,
+    def get_strategy_stats(self, algorithm: str) -> dict:
+        """Returns statistics and raw returns for an algorithm."""
+        signals = self.db.get_strategy_signals(algorithm, limit=100)
+        if not signals:
+            return {}
+        returns = [s['pnl_pct'] for s in signals if s.get('pnl_pct') is not None]
+        wins = [r for r in returns if r > 0]
+        return {
+            'total_signals': len(signals),
+            'win_rate': len(wins) / max(len(returns), 1),
+            'avg_return': sum(returns) / max(len(returns), 1),
+            'returns': returns
         }
-        self.data[algorithm]['signals'].append(record)
-        # Keep last 500 signals per algorithm
-        self.data[algorithm]['signals'] = self.data[algorithm]['signals'][-500:]
-        self._save()
-        logger.debug(f"[Perf] Recorded {algorithm} signal: {signal} {ticker} @ {entry_price:.2f}")
 
-    def record_outcome(self, algorithm: str, ticker: str,
-                       exit_price: float, entry_price: float):
-        """Update the most recent open signal for this algo/ticker with its outcome."""
-        if algorithm not in self.data:
-            return
-        for sig in reversed(self.data[algorithm]['signals']):
-            if sig['ticker'] == ticker and sig['outcome'] is None:
-                pnl_pct = (exit_price - sig['entry_price']) / sig['entry_price'] * 100
-                if sig['signal'] == 'SELL':
-                    pnl_pct = -pnl_pct
-                sig['outcome']   = 'WIN' if pnl_pct > 0 else 'LOSS'
-                sig['pnl_pct']   = round(pnl_pct, 3)
-                sig['exit_price']   = exit_price
-                sig['closed_at'] = datetime.now().isoformat()
-                self._update_stats(algorithm)
-                self._save()
-                return
-
-    def _update_stats(self, algorithm: str):
-        """Recompute win rate, avg return, Sharpe for an algorithm."""
-        signals = self.data[algorithm]['signals']
-        closed  = [s for s in signals if s['outcome'] is not None]
-        if len(closed) < 3:
-            return
-
-        returns  = [s['pnl_pct'] for s in closed]
-        wins     = [r for r in returns if r > 0]
-        losses   = [r for r in returns if r <= 0]
-        avg_ret  = sum(returns) / len(returns)
-        win_rate = len(wins) / len(returns)
+    def _compute_stats(self, algorithm: str) -> dict:
+        """Compute detailed stats for a single algorithm."""
+        signals = self.db.get_strategy_signals(algorithm, limit=100)
+        closed = [s for s in signals if s.get('pnl_pct') is not None]
+        if not closed:
+            return {}
 
         import numpy as np
-        std_ret = float(np.std(returns)) if len(returns) > 1 else 1.0
-        sharpe  = (avg_ret / std_ret * (252 ** 0.5)) if std_ret > 0 else 0.0
+        returns = [s['pnl_pct'] for s in closed]
+        wins = [r for r in returns if r > 0]
+        losses = [r for r in returns if r <= 0]
+        avg_ret = sum(returns) / len(returns)
+        win_rate = len(wins) / len(returns)
 
-        self.data[algorithm]['stats'] = {
+        std_ret = float(np.std(returns)) if len(returns) > 1 else 1.0
+        sharpe = (avg_ret / std_ret * (252 ** 0.5)) if std_ret > 0 else 0.0
+
+        return {
             'total_signals':  len(closed),
             'win_rate':       round(win_rate, 3),
             'avg_return_pct': round(avg_ret, 3),
@@ -122,16 +91,14 @@ class StrategyPerformanceTracker:
     def get_algorithm_weights(self) -> Dict[str, float]:
         """
         Return dynamic weights for each algorithm based on Sharpe ratio.
-        Algorithms with negative Sharpe get minimum weight (0.1).
         Used by AlgorithmSelector to weight consensus votes.
         """
         weights = {}
         for algo in self.ALGORITHMS:
-            stats = self.data.get(algo, {}).get('stats', {})
+            stats = self._compute_stats(algo)
             sharpe = stats.get('sharpe_ratio', 0.0)
-            # Min weight 0.1, max weight 2.0; baseline 1.0 with no data
             if not stats:
-                weights[algo] = 1.0   # Equal weight until we have data
+                weights[algo] = 1.0
             else:
                 weights[algo] = max(0.1, min(2.0, 1.0 + sharpe * 0.5))
         return weights
@@ -147,8 +114,9 @@ class StrategyPerformanceTracker:
         now = datetime.now()
 
         for algo in self.ALGORITHMS:
-            signals = self.data.get(algo, {}).get('signals', [])
-            closed = [s for s in signals if s.get('outcome') is not None and s.get('pnl_pct') is not None]
+            signals = self.db.get_strategy_signals(algo, limit=100)
+            closed = [s for s in signals
+                      if s.get('outcome') is not None and s.get('pnl_pct') is not None]
             if len(closed) < min_closed:
                 weights[algo] = 1.0
                 continue
@@ -160,7 +128,7 @@ class StrategyPerformanceTracker:
             weighted_loss = 0.0
 
             for sig in closed:
-                stamp = sig.get('closed_at') or sig.get('timestamp')
+                stamp = sig.get('timestamp')
                 try:
                     ts = datetime.fromisoformat(stamp)
                 except Exception:
@@ -187,50 +155,23 @@ class StrategyPerformanceTracker:
 
             score = 1.0 + (avg_return / 5.0) + (win_rate - 0.50) + min(profit_factor - 1.0, 1.0) * 0.25
             weights[algo] = round(max(0.10, min(2.00, score)), 3)
-
         return weights
 
-    def get_strategy_health(self, half_life_days: int = 60) -> Dict[str, Dict]:
-        """Return recent performance diagnostics for dashboards and routers."""
-        weights = self.get_decayed_algorithm_weights(half_life_days=half_life_days)
-        health = {}
-        for algo in self.ALGORITHMS:
-            stats = self.data.get(algo, {}).get('stats', {})
-            health[algo] = {
-                'weight': weights.get(algo, 1.0),
-                'total_signals': stats.get('total_signals', 0),
-                'win_rate': stats.get('win_rate', None),
-                'avg_return_pct': stats.get('avg_return_pct', None),
-                'profit_factor': stats.get('profit_factor', None),
-                'sharpe_ratio': stats.get('sharpe_ratio', None),
-            }
-        return health
-
-    def print_leaderboard(self):
-        """Print a formatted leaderboard of algorithm performance."""
-        header = f"\n{'Algorithm':<22} {'Signals':>8} {'Win%':>7} {'AvgRet':>8} {'Sharpe':>8} {'PF':>6}"
-        print(header)
-        print('-' * len(header))
-        rows = []
-        for algo in self.ALGORITHMS:
-            stats = self.data.get(algo, {}).get('stats', {})
-            if not stats:
-                rows.append((0, algo, '—', '—', '—', '—'))
-            else:
-                rows.append((
-                    stats.get('sharpe_ratio', 0),
-                    algo,
-                    str(stats.get('total_signals', 0)),
-                    f"{stats.get('win_rate', 0):.0%}",
-                    f"{stats.get('avg_return_pct', 0):+.2f}%",
-                    f"{stats.get('sharpe_ratio', 0):.2f}",
-                    f"{stats.get('profit_factor', 0):.1f}",
-                ))
-        for row in sorted(rows, key=lambda x: x[0], reverse=True):
-            if len(row) == 7:
-                _, algo, sigs, wr, avgr, sharpe, pf = row
-                print(f"{algo:<22} {sigs:>8} {wr:>7} {avgr:>8} {sharpe:>8} {pf:>6}")
-            else:
-                _, algo, *rest = row
-                print(f"{algo:<22} {'No data':>8}")
-        print()
+    def get_algorithm_stats(self, algorithm: str) -> dict:
+        """
+        Returns live performance stats for a single algorithm.
+        Returns empty dict if insufficient data (< 10 trades).
+        """
+        stats = self.get_strategy_stats(algorithm)
+        if not stats or stats.get('total_signals', 0) < 10:
+            return {}
+        returns = [r for r in stats.get('returns', []) if r is not None]
+        if not returns:
+            return {}
+        wins = [r for r in returns if r > 0]
+        losses = [r for r in returns if r <= 0]
+        return {
+            'win_rate': len(wins) / max(len(returns), 1),
+            'avg_return': sum(wins) / max(len(wins), 1),
+            'avg_loss': abs(sum(losses) / max(len(losses), 1)) or 0.05,
+        }

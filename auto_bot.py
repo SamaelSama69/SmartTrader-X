@@ -6,6 +6,7 @@ import time
 import logging
 import schedule
 import pandas as pd
+from typing import List, Dict
 import yfinance as yf
 from datetime import datetime
 from pathlib import Path
@@ -22,11 +23,13 @@ from strategies.stocks import SectorRotationStrategy
 from utils.market_regime import IndianMarketRegime
 from utils.multilingual_sentiment import get_news_aggregator
 from utils.shoonya_broker import ShoonyaBroker
-from utils.performance_report import PerformanceReport
-from utils.pdf_generator import PDFReportGenerator
+from utils.reporting_service import ReportingService
 from utils.sentiment_db import SentimentDB
 from utils.sebi_compliance import get_compliance_manager, AlgoStatus
 from utils.notifier import Notifier
+from utils.strategy_gatekeeper import StrategyGatekeeper
+from utils.memory_manager import PredictionMemory
+from utils.performance_tracker import StrategyPerformanceTracker
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -40,10 +43,13 @@ class AutonomousBot:
         self.momentum_strategy = IndianMomentumStrategy()
         self.sector_rotation = SectorRotationStrategy()
         self.news_aggregator = get_news_aggregator()
-        self.pdf_gen = PDFReportGenerator()
+        self.reporting_svc = ReportingService()
         self.sentiment_db = SentimentDB()
         self.compliance = get_compliance_manager()
         self.notifier = Notifier()
+        self.gatekeeper = StrategyGatekeeper()
+        self.prediction_memory = PredictionMemory()
+        self.perf_tracker = StrategyPerformanceTracker()
         
         # Register bot with compliance manager
         self.algo_id = "SMARTTRADER_AUTO_001"
@@ -77,6 +83,76 @@ class AutonomousBot:
 
     def manage_open_positions(self):
         logger.info("Checking open positions for SL/TP and SMART EXITs...")
+        
+        from indian_config import INTRADAY_CONFIG
+        now = datetime.now()
+        
+        if now.weekday() < 5:  # Mon-Fri only
+            eval_time = now.replace(hour=15, minute=0, second=0, microsecond=0)
+            sq_time = now.replace(
+                hour=INTRADAY_CONFIG['square_off_time'].hour,
+                minute=INTRADAY_CONFIG['square_off_time'].minute,
+                second=0, microsecond=0
+            )
+            
+            # --- 3:00 PM Pre-Close Evaluation ---
+            if eval_time <= now < sq_time and not hasattr(self, '_pre_close_evaluated'):
+                logger.info("🕒 3:00 PM Pre-Close Evaluation: Reviewing automated positions...")
+                open_pos = self.paper_mgr.get_open_positions()
+                regime = self.regime_detector.get_regime()
+                
+                for pos in open_pos:
+                    if pos.get('is_manual'):
+                        continue  # Respect manual modes strictly
+                        
+                    try:
+                        ticker = pos['ticker']
+                        df = self._fetch_data(ticker, "1d")
+                        current_price = float(df['Close'].iloc[-1]) if not df.empty else pos['entry_price']
+                        
+                        entry = pos['entry_price']
+                        pnl_pct = ((current_price - entry) / entry) if pos['signal'] == 'BUY' else ((entry - current_price) / entry)
+                        pnl_pct *= 100
+                        
+                        # INTRADAY -> SWING Upgrade
+                        if pos.get('trade_mode') == 'INTRADAY' and pnl_pct > 2.5:
+                            logger.info(f"🚀 Upgrading {ticker} to SWING (Strong momentum: +{pnl_pct:.2f}%)")
+                            self.paper_mgr.update_trade_mode(pos['id'], 'SWING')
+                            
+                        # SWING -> INTRADAY Downgrade
+                        elif pos.get('trade_mode') == 'SWING':
+                            if pnl_pct < -2.0 or 'BEAR' in regime:
+                                logger.warning(f"📉 Downgrading {ticker} to INTRADAY (Weakness or Bear Regime)")
+                                self.paper_mgr.update_trade_mode(pos['id'], 'INTRADAY')
+                                
+                    except Exception as e:
+                        logger.error(f"Pre-close evaluation failed for {pos.get('ticker')}: {e}")
+                self._pre_close_evaluated = True
+
+            # --- 3:15 PM EOD Square-Off ---
+            if now >= sq_time:
+                open_pos = self.paper_mgr.get_open_positions()
+                intraday_pos = [p for p in open_pos if p.get('trade_mode') == 'INTRADAY']
+                if intraday_pos:
+                    logger.warning(f"EOD SQUARE-OFF: Closing {len(intraday_pos)} INTRADAY positions at {now.strftime('%H:%M')}")
+                    for pos in intraday_pos:
+                        try:
+                            df = self._fetch_data(pos['ticker'], "1d")
+                            price = float(df['Close'].iloc[-1]) if not df.empty else pos['entry_price']
+                            self.paper_mgr.close_trade(pos['id'], price, reason='EOD_SQUAREOFF', source='BOT')
+                            logger.info(f"EOD closed: {pos['ticker']} at ₹{price:.2f}")
+                        except Exception as e:
+                            logger.error(f"EOD close failed for {pos['ticker']}: {e}")
+                # Reset evaluation flag for the next day
+                if now.hour == 23:
+                    if hasattr(self, '_pre_close_evaluated'):
+                        del self._pre_close_evaluated
+        
+        # Add trailing stop updates
+        trailing_updates = self.paper_mgr.apply_trailing_stops(atr_trail=2.0)
+        for u in trailing_updates:
+            logger.info(f"Trailing stop updated: {u['ticker']} | {u['old_stop']:.2f} → {u['new_stop']:.2f}")
+
         if self.mode == 'paper':
             # 1. Standard SL/TP Check
             closed_summaries = self.paper_mgr.close_positions()
@@ -86,6 +162,23 @@ class AutonomousBot:
                     subject=f"Trade Closed: {summary['ticker']} ({summary['pnl_pct']:+.2f}%)",
                     message=f"Exit: ₹{summary['exit_price']:.2f} | Reason: {summary['reason']} | Mode: PAPER",
                     level="ORDER"
+                )
+                # Record outcome in PredictionMemory
+                pred_id = summary.get('prediction_id', '')
+                if pred_id:
+                    pnl_pct = summary['pnl_pct'] / 100.0  # summary stores as percent
+                    self.prediction_memory.record_outcome(pred_id, {
+                        'exit_price': summary['exit_price'],
+                        'pnl_pct': pnl_pct,
+                        'correct': pnl_pct > 0 if summary.get('signal') == 'BUY' else pnl_pct < 0,
+                        'exit_reason': summary['reason'],
+                    })
+                # Record in PerformanceTracker
+                strategy_name = summary.get('strategy', 'indian_momentum')
+                self.perf_tracker.record_trade_history(
+                    algorithm=strategy_name,
+                    signal=summary.get('signal', 'BUY'),
+                    pnl_pct=summary['pnl_pct'] / 100.0
                 )
             
             # 2. Smart Exit Logic (Contrarian)
@@ -110,12 +203,12 @@ class AutonomousBot:
                     c_score = result['factors'].get('contrarian_score', 0)
                     
                     # Smart Exit Rule for LONGs: News is bad, but price is high (Overextended)
-                    if pos['signal'] == 'BUY' and c_score < -3.5:
+                    if pos['signal'] == 'BUY' and c_score < -1.4:
                         logger.info(f"[SMART EXIT] {ticker} is OVEREXTENDED (Score: {c_score:.2f}). Taking profits early.")
                         self.paper_mgr.close_trade(pos['id'], result['current_price'], reason="SMART", source='BOT')
                         
                     # Smart Exit Rule for SHORTs: News is recovering, but price is low (Bullish Underdog)
-                    elif pos['signal'] == 'SHORT' and c_score > 3.5:
+                    elif pos['signal'] == 'SHORT' and c_score > 1.4:
                         logger.info(f"[SMART EXIT] {ticker} showing RECOVERY BUZZ (Score: {c_score:.2f}). Covering early.")
                         self.paper_mgr.close_trade(pos['id'], result['current_price'], reason="SMART", source='BOT')
                         
@@ -201,8 +294,37 @@ class AutonomousBot:
 
                 # Execute Trade ( Kelly > 0.5)
                 if result['signal'] in ('BUY', 'SHORT') and result['confidence'] > 0.5:
+                    
+                    # --- Gatekeeper: only trade strategies that have been validated ---
+                    strategy_id = result.get('strategy_used', 'indian_momentum')
+                    gate_ok, gate_reason = self.gatekeeper.allow_trade(strategy_id, ticker)
+                    if not gate_ok:
+                        logger.info(f"[GATEKEEPER] Blocked {ticker} ({strategy_id}): {gate_reason}")
+                        continue
+                    elif "No backtest data" in gate_reason:
+                        logger.warning(f"[GATEKEEPER] {ticker} ({strategy_id}) has no test data — proceeding at reduced size")
+                        # Reduce confidence to 50% of normal when untested
+                        result['confidence'] *= 0.5
+
+                    # After result is obtained and before trade execution, optionally override with best validated:
+                    best_validated = self.gatekeeper.get_best_validated_strategy(ticker)
+                    if best_validated and best_validated != strategy_id:
+                        logger.debug(f"Gatekeeper suggests {best_validated} over {strategy_id} for {ticker}")
+
                     price = result['current_price']
-                    shares = self.risk_mgr.size_position_kelly(price, result['confidence'] * risk_mult)
+                    # Reduce position size by 20% during earnings season (gap risk)
+                    from indian_config import is_earnings_season
+                    earnings_discount = 0.80 if is_earnings_season() else 1.0
+                    
+                    # Dynamic Kelly: use REAL performance stats instead of hardcoded defaults
+                    perf_stats = self.perf_tracker.get_strategy_stats(strategy_id)
+                    adjusted_confidence = result['confidence'] * risk_mult * earnings_discount
+                    if perf_stats and perf_stats.get('win_rate') is not None:
+                        shares = self.risk_mgr.size_position_dynamic(
+                            price, adjusted_confidence, perf_stats
+                        )
+                    else:
+                        shares = self.risk_mgr.size_position_kelly(price, adjusted_confidence)
                     
                     # Pass sector to risk check
                     risk_check = self.risk_mgr.check_trade(ticker, shares, price, sector=sector)
@@ -219,7 +341,24 @@ class AutonomousBot:
                             logger.warning(f"COMPLIANCE BLOCK: {ticker} rejected. Reason: {reason}")
                             continue
 
-                        self.paper_mgr.open_trade(ticker, result['signal'], price, final_shares, result['stop_loss'], result['price_target'], sector=sector)
+                        # Record prediction BEFORE opening trade
+                        pred_id = f"{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        self.prediction_memory.add_prediction(ticker, {
+                            'signal': result['signal'],
+                            'confidence': result['confidence'],
+                            'price': price,
+                            'stop_loss': result['stop_loss'],
+                            'price_target': result['price_target'],
+                            'strategy': strategy_id,
+                            'sector': sector,
+                        })
+
+                        self.paper_mgr.open_trade(
+                            ticker, result['signal'], price, final_shares,
+                            result['stop_loss'], result['price_target'],
+                            sector=sector, prediction_id=pred_id,
+                            strategy=strategy_id
+                        )
                         # Record trade in risk manager with sector context
                         self.risk_mgr.record_trade(ticker, final_shares, price, result['signal'], sector=sector)
                         logger.info(f"ORDER: [AUTO] {result['signal']} {ticker} executed (Sector: {sector}).")
@@ -258,9 +397,6 @@ class AutonomousBot:
         self._save_scan_results(final_ui_list)
         logger.info(f"Sector [{sector}] scan complete. Buffer now has {len(self.global_signal_buffer)} signals.")
 
-    def find_and_execute_trades(self):
-        """Deprecated in favor of run_continuous_scan"""
-        pass
 
     def _save_scan_results(self, results):
         try:
@@ -323,23 +459,60 @@ class AutonomousBot:
             return df
         except: return pd.DataFrame()
 
+    def run_weekly_validation(self):
+        """
+        Automatically re-runs backtests and walk-forward tests for all strategies
+        currently being traded. Runs every Sunday at midnight so Monday trading
+        uses fresh validation data.
+
+        Called by: schedule.every().sunday.at("00:00").do(bot.run_weekly_validation)
+        """
+        from utils.testing_engine import TestingEngine
+        from indian_config import POPULAR_INDIAN_STOCKS
+
+        logger.info("[GATEKEEPER] Starting weekly strategy re-validation...")
+        engine = TestingEngine()
+
+        # Strategies the autobot actually uses
+        active_strategies = ["indian_momentum", "momentum_breakout", "sector_rotation"]
+        # Representative tickers (top 10 most frequently traded)
+        rep_tickers = [t + ".NS" for t in POPULAR_INDIAN_STOCKS.get("large_cap", [])[:10]]
+
+        for strategy in active_strategies:
+            for ticker in rep_tickers[:3]:   # validate on 3 tickers per strategy
+                try:
+                    logger.info(f"[GATEKEEPER] Validating {strategy} on {ticker}...")
+                    engine.run_walk_forward(strategy, ticker, days=365, force=True)
+                except Exception as e:
+                    logger.error(f"[GATEKEEPER] Validation failed for {strategy}/{ticker}: {e}")
+
+        # Reload gatekeeper cache
+        self.gatekeeper = StrategyGatekeeper()
+        gk_sum = self.gatekeeper.summary()
+        logger.info(
+            f"[GATEKEEPER] Weekly validation complete: "
+            f"{gk_sum['passed']}/{gk_sum['total_tests']} passed"
+        )
+        self.notifier.send(
+            subject="Weekly Strategy Validation Complete",
+            message=(
+                f"Passed: {gk_sum['passed']}/{gk_sum['total_tests']} "
+                f"({gk_sum['pass_rate']:.0f}% pass rate)"
+            ),
+            level="INFO"
+        )
+
     def generate_weekly_pdf(self):
-        logger.info("Generating weekly performance report PDF...")
-        try:
-            cursor = self.paper_mgr.conn.execute("SELECT * FROM paper_trades")
-            cols = [d[0] for d in cursor.description]
-            trades = [dict(zip(cols, row)) for row in cursor.fetchall()]
-            if not trades: return
-            metrics = PerformanceReport.generate_metrics(trades)
-            if not metrics or "status" in metrics: metrics = {"total_trades": len(trades), "closed_trades": 0}
-            report_path = self.pdf_gen.generate_weekly_report(metrics, trades)
-            logger.info(f"Weekly report saved to: {report_path}")
-        except Exception as e: logger.error(f"Error generating PDF report: {e}")
+        self.reporting_svc.generate_weekly_report(self.paper_mgr.conn)
 
     def is_market_open(self):
-        """Check if Indian market is currently open (9:15 AM - 3:30 PM)."""
+        """Check if Indian market is currently open (9:15 AM - 3:30 PM, excl. weekends & NSE holidays)."""
+        from indian_config import get_nse_holidays
         now = datetime.now()
         if now.weekday() >= 5: return False
+        # Check NSE holiday calendar
+        today_str = now.strftime('%Y-%m-%d')
+        if today_str in get_nse_holidays(now.year): return False
         m_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
         m_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
         return m_open <= now <= m_close
@@ -364,15 +537,22 @@ class AutonomousBot:
             logger.error(f"Failed to save signal buffer: {e}")
 
 def main():
+    import sys, time
     mode = 'paper'
     if len(sys.argv) > 1 and sys.argv[1] == '--live': mode = 'live'
     bot = AutonomousBot(mode=mode)
-    bot.run_continuous_scan()
-    schedule.every(1).minutes.do(bot.run_continuous_scan)
+    schedule.every().sunday.at("00:00").do(bot.run_weekly_validation)
     schedule.every().friday.at("18:00").do(bot.generate_weekly_pdf)
-    logger.info("Bot is now running in the background. Press Ctrl+C to stop.")
+    logger.info("SmartTrader AutoBot running. Press Ctrl+C to stop.")
+    SCAN_INTERVAL = 120
     while True:
+        scan_start = time.time()
+        try: bot.run_continuous_scan()
+        except Exception as e: logger.error(f"Scan crashed: {e}", exc_info=True)
         schedule.run_pending()
-        time.sleep(60)
+        elapsed = time.time() - scan_start
+        wait = max(15, SCAN_INTERVAL - elapsed)
+        logger.info(f"Scan took {elapsed:.0f}s — next in {wait:.0f}s.")
+        time.sleep(wait)
 
 if __name__ == "__main__": main()

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Indian Market Configuration
 All settings specific to NSE/BSE Indian markets
 """
@@ -17,7 +17,7 @@ INDIAN_DATA_DIR.mkdir(parents=True, exist_ok=True)
 INDIAN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Minimum confidence to execute a trade
-MIN_CONFIDENCE_SWING = 0.55    # For swing trades (hold 3-10 days)
+MIN_CONFIDENCE_SWING = 0.65    # aligned with backtest-validated threshold
 MIN_CONFIDENCE_INTRADAY = 0.65  # For intraday/ORB trades
 
 # =============================================================================
@@ -403,6 +403,24 @@ def is_budget_day(today=None) -> bool:
         from datetime import datetime
         today = datetime.now()
     return today.month == BUDGET_DAY_CONFIG["date"][0] and today.day == BUDGET_DAY_CONFIG["date"][1]
+
+def is_earnings_season(today=None) -> bool:
+    """Returns True during quarterly results peak months.
+
+    Peak months: Jan, Apr, Jul, Oct (full month) plus the first week
+    of the following month (Feb 1-7, May 1-7, Aug 1-7, Nov 1-7).
+    During earnings season, position sizes should be reduced to
+    account for surprise gap risk.
+    """
+    if today is None:
+        from datetime import datetime
+        today = datetime.now()
+    if today.month in (1, 4, 7, 10):
+        return True
+    if today.month in (2, 5, 8, 11) and today.day <= 7:
+        return True
+    return False
+
 
 def get_lot_size(ticker: str) -> int:
     """Get F&O lot size for a ticker"""

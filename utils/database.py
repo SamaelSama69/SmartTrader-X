@@ -5,7 +5,7 @@ Replaces JSON files for better querying and multi-process access
 import sqlite3
 import json
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 import threading
 
@@ -35,9 +35,16 @@ class Database:
                     ticker TEXT NOT NULL,
                     prediction TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
-                    outcome_recorded INTEGER DEFAULT 0
+                    outcome_recorded INTEGER DEFAULT 0,
+                    outcome_data TEXT
                 )
             ''')
+
+            # Migration: add outcome_data column to existing DBs
+            try:
+                cursor.execute("ALTER TABLE predictions ADD COLUMN outcome_data TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
             # Outcomes table
             cursor.execute('''
@@ -81,6 +88,18 @@ class Database:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     last_updated TEXT NOT NULL
+                )
+            ''')
+
+            # Strategy performance table (replaces JSON file)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS strategy_performance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    algorithm TEXT NOT NULL,
+                    signal TEXT NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    outcome TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
                 )
             ''')
 
@@ -210,3 +229,87 @@ class Database:
                     'last_updated': row[1]
                 }
             return None
+
+    # ── Prediction Outcome Recording ─────────────────────────────────────
+
+    def record_outcome(self, prediction_id: str, outcome: Dict):
+        """Record the actual outcome of a prediction via targeted UPDATE."""
+        with self._lock:
+            conn = self._get_connection()
+            conn.execute(
+                """UPDATE predictions
+                   SET outcome_recorded = 1,
+                       outcome_data = ?
+                   WHERE id = ?""",
+                (json.dumps(outcome), prediction_id)
+            )
+            conn.commit()
+            conn.close()
+
+    # ── Strategy Performance (SQLite backend) ────────────────────────────
+
+    def record_strategy_trade(self, algorithm: str, signal: str,
+                               pnl_pct: float, outcome: str):
+        """Record a single strategy trade outcome."""
+        with self._lock:
+            conn = self._get_connection()
+            conn.execute(
+                "INSERT INTO strategy_performance "
+                "(algorithm, signal, pnl_pct, outcome, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (algorithm, signal, pnl_pct, outcome,
+                 datetime.now().isoformat())
+            )
+            conn.commit()
+            conn.close()
+
+    def get_strategy_signals(self, algorithm: str,
+                              limit: int = 100) -> List[Dict]:
+        """Get recent trade signals for a strategy."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT algorithm, signal, pnl_pct, outcome, timestamp "
+                "FROM strategy_performance "
+                "WHERE algorithm = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (algorithm, limit)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                {
+                    'algorithm': r[0], 'signal': r[1],
+                    'pnl_pct': r[2], 'outcome': r[3],
+                    'timestamp': r[4]
+                }
+                for r in rows
+            ]
+
+    def get_all_strategy_signals(self, limit: int = 100) -> Dict[str, List[Dict]]:
+        """Get recent trade signals grouped by algorithm."""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT algorithm, signal, pnl_pct, outcome, timestamp "
+                "FROM strategy_performance "
+                "ORDER BY id DESC LIMIT ?",
+                (limit * 10,)  # Fetch more, then group
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            grouped: Dict[str, List[Dict]] = {}
+            for r in rows:
+                algo = r[0]
+                if algo not in grouped:
+                    grouped[algo] = []
+                if len(grouped[algo]) < limit:
+                    grouped[algo].append({
+                        'algorithm': r[0], 'signal': r[1],
+                        'pnl_pct': r[2], 'outcome': r[3],
+                        'timestamp': r[4]
+                    })
+            return grouped
