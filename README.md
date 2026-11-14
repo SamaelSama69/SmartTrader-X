@@ -18,6 +18,7 @@ Powered by advanced regime-aware momentum strategies, dynamic position sizing (K
 *   **Earnings & Holiday Safety:** Detects NSE trading holidays and automatically scales down position sizes by 20% during earnings seasons to protect against unpredictable gap volatility.
 *   **Fully Autonomous AutoBot:** A background trading engine that manages entry/exit conditions, performs EOD square-offs by 3:15 PM IST for intraday strategies, and continuously monitors live portfolio PnL.
 *   **Interactive Dashboard:** A responsive Streamlit-based UI that provides a live Strategy Scanner, Backtesting Lab, and real-time Shoonya order tracking.
+*   **Recommendation Book:** Turns capital, risk, and horizon into a sized trading sleeve and a longer investment sleeve. The first dashboard page builds the book. It does not send an order.
 
 ---
 
@@ -95,6 +96,12 @@ Use the master script `run.bat` to launch the platform:
 ```bash
 # Launch the main Streamlit Dashboard
 run.bat
+
+# Build a recommendation book without live prices
+python -m recommender --demo --capital 500000 --risk balanced --horizon both
+
+# Build the same book from live NSE large-cap prices
+python -m recommender --capital 500000 --risk balanced --horizon investment
 
 # Alternatively, launch components via the scripts directory:
 scripts\run_gui.bat
