@@ -1,5 +1,13 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.10+-00FFA3?style=for-the-badge&logo=python&logoColor=0E1117" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/pandas-150458?style=for-the-badge&logo=pandas&logoColor=white" alt="pandas">
+  <img src="https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white" alt="NumPy">
+  <img src="https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white" alt="Streamlit">
+  <img src="https://img.shields.io/badge/Plotly-3F4F75?style=for-the-badge&logo=plotly&logoColor=white" alt="Plotly">
+  <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch">
+  <img src="https://img.shields.io/badge/FinBERT-ProsusAI-00FFA3?style=for-the-badge" alt="FinBERT">
+  <img src="https://img.shields.io/badge/Qwen-optional%20local%20model-615CED?style=for-the-badge" alt="Qwen">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/markets-NSE%20%7C%20BSE-00D1FF?style=for-the-badge" alt="NSE and BSE">
   <img src="https://img.shields.io/badge/license-MIT-E0E0E0?style=for-the-badge" alt="MIT">
 </p>
@@ -84,7 +92,11 @@ The cards follow published schedules from early 2026. Delivery STT here is 0.1% 
 
 ## A local model, if you want one
 
-The book is finished before any model is asked. Press **Ask the local model** on the recommendations page and, if `QWEN_MODEL` is set, the desk sends the book, one round trip, and the holdings mix to an OpenAI-compatible server. The default address is `http://192.168.10.3:8998/v1`. The reply has to be three notes: trend, cost, and news. A missing model, a server that does not answer, or a reply that is not those three notes leaves the share counts where the engine put them. With no headlines attached, the news line says so. FinBERT, when you run it, stays a separate numeric sentiment server. It is not required.
+The book is finished before any model is asked. Press **Ask the local model** on the recommendations page and, if `QWEN_MODEL` is set, the desk sends the book, one round trip, and the holdings mix to an OpenAI-compatible server. The default address is `http://192.168.10.3:8998/v1`, which is where a local **Qwen** build can sit (the machine used while writing this runs Qwen 3.6 35B AWQ). The client does not care about the brand. Any chat model that speaks `/v1/chat/completions` works: Qwen, Llama, Mistral, or another local server. Put that server's model id in `QWEN_MODEL`.
+
+The reply has to be three notes: trend, cost, and news. A missing model, a server that does not answer, or a reply that is not those three notes leaves the share counts where the engine put them. With no headlines attached, the news line says so.
+
+**FinBERT** (`ProsusAI/finbert`) is a different model and a different job. It scores headlines as a number, through PyTorch, Transformers, and an optional OpenVINO path, and it is served by the FastAPI app in `sentiment_server.py`. VADER covers a headline when the transformer is not loaded. Neither model is required for the sample desk.
 
 ```env
 # leave these commented and the desk still runs
@@ -124,9 +136,21 @@ SmartTrader-X/
 
 ## Stack
 
-`Python 3.10` · `pandas` · `NumPy` · `Streamlit` · `Plotly` · `pytest`
+| | Libraries and models |
+| --- | --- |
+| Language | Python 3.10 or newer |
+| Data | pandas, NumPy, SciPy, Yahoo Finance through `yfinance`, the public MF NAV feed |
+| Desk | Streamlit, Plotly, Matplotlib, Seaborn |
+| Research book | The `recommender` package. No extra model. |
+| Broker and calendar | `NorenRestApiPy` for Shoonya, `pyotp` for the login code, `pytz` for India time |
+| News | `feedparser`, `vaderSentiment`, `praw` for Reddit, requests |
+| Sentiment model | FinBERT, `ProsusAI/finbert`, on PyTorch and Hugging Face Transformers. OpenVINO and Optimum are the faster local path. Sentence-Transformers and XGBoost are in the optional ML requirements. |
+| Notes model | Any OpenAI-compatible local chat model. Qwen is the one this desk was pointed at. Llama and Mistral work the same way if you set `QWEN_MODEL` to their id. |
+| Service | FastAPI and Uvicorn for the sentiment server |
+| Backtest | A pandas backtester in the repo. vectorbt is optional, in `requirements-ml.txt`. |
+| Tests | pytest |
 
-Yahoo Finance is the live price source. The public mutual-fund NAV feed is used only when live marks are on. A Shoonya login, news keys, and a local model are all optional.
+A Shoonya login, news keys, FinBERT, and the local chat model are all optional. The sample market runs on pandas and the files in `recommender/`.
 
 ## Run
 
