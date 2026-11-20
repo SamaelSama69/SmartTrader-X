@@ -41,6 +41,7 @@ from utils.performance_report import PerformanceReport
 from utils.sentiment_db import SentimentDB
 from utils.testing_engine import TestingEngine
 from utils.strategy_gatekeeper import StrategyGatekeeper
+from recommender.desk import render_costs, render_holdings, render_live_desk
 from recommender.view import render_recommendations
 
 # --- CONFIGURATION ---
@@ -181,6 +182,7 @@ def render_sidebar(bot_data):
         st.title("SmartTrader Pro")
         menu = st.radio("Navigation", [
             "Recommendations",
+            "Live Desk", "Costs", "Holdings",
             "Market Pulse", "News Hub", "Strategy Scanner", "Deep Analysis",
             "Portfolio Hub", "Performance Report",
             "🧪 Testing Lab",
@@ -1184,6 +1186,9 @@ def render_log_viewer():
 def main():
     bot_data = load_shared_bot_data(); menu = render_sidebar(bot_data); render_top_bar(bot_data)
     if menu == "Recommendations": render_recommendations()
+    elif menu == "Live Desk": render_live_desk()
+    elif menu == "Costs": render_costs()
+    elif menu == "Holdings": render_holdings()
     elif menu == "Market Pulse": render_market_pulse(bot_data)
     elif menu == "News Hub": render_news_hub(bot_data)
     elif menu == "Deep Analysis": render_deep_analysis()

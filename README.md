@@ -19,6 +19,9 @@ Powered by advanced regime-aware momentum strategies, dynamic position sizing (K
 *   **Fully Autonomous AutoBot:** A background trading engine that manages entry/exit conditions, performs EOD square-offs by 3:15 PM IST for intraday strategies, and continuously monitors live portfolio PnL.
 *   **Interactive Dashboard:** A responsive Streamlit-based UI that provides a live Strategy Scanner, Backtesting Lab, and real-time Shoonya order tracking.
 *   **Recommendation Book:** Turns capital, risk, and horizon into a sized trading sleeve and a longer investment sleeve. The first dashboard page builds the book. It does not send an order.
+*   **Live Desk:** Candles, moving averages, RSI, and MACD for a name, plus a screen that only flags a setup when the recent swing is larger than a round trip on Zerodha, Groww, Upstox, Angel One, or Shoonya. A flag is not a promised profit.
+*   **Platform Costs:** Delivery and intraday charges, the smallest ticket that keeps those charges under a limit you set, and direct-plan mutual fund minimums with exit load and expense ratio.
+*   **Holdings:** A local book of who holds which share or fund on which platform, with a mark, an open result, and the cost of selling. The file stays on this machine.
 
 ---
 
