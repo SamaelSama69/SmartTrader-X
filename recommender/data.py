@@ -91,6 +91,39 @@ def _path(start: float, end: float, kind: str, n: int = 80) -> pd.DataFrame:
     return pd.DataFrame({"Close": close, "Volume": [1_000_000] * n}, index=index)
 
 
+def as_ohlcv(close: pd.Series) -> pd.DataFrame:
+    """Build a candle frame from closes so the desk can chart the sample market."""
+    series = close.dropna()
+    prev = series.shift(1).fillna(series.iloc[0])
+    high = pd.concat([series, prev], axis=1).max(axis=1) * 1.002
+    low = pd.concat([series, prev], axis=1).min(axis=1) * 0.998
+    return pd.DataFrame(
+        {
+            "Open": prev,
+            "High": high,
+            "Low": low,
+            "Close": series,
+            "Volume": 100_000,
+        },
+        index=series.index,
+    )
+
+
+def fetch_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
+    """Download one NSE candle history. Empty when the feed returns nothing."""
+    import yfinance as yf
+
+    symbol = _nse(ticker)
+    frame = yf.Ticker(symbol).history(period=period, auto_adjust=True)
+    if frame is None or frame.empty or "Close" not in frame.columns:
+        return pd.DataFrame()
+    frame = frame.dropna(subset=["Close"])
+    if hasattr(frame.index, "tz") and frame.index.tz is not None:
+        frame.index = frame.index.tz_convert(None)
+    columns = [name for name in ("Open", "High", "Low", "Close", "Volume") if name in frame.columns]
+    return frame[columns]
+
+
 def _nse(ticker: str) -> str:
     if ticker.endswith((".NS", ".BO")) or ticker.startswith("^"):
         return ticker
