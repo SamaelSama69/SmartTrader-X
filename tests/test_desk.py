@@ -44,7 +44,11 @@ def test_a_round_trip_larger_than_the_swing_blocks_the_screen():
     assert "does not cover" in row["note"]
 
 
-def test_short_history_is_not_reviewed():
+def test_a_straight_rise_still_reviews():
+    row = review(pd.Series([100 + i * 0.2 for i in range(80)]), cost_share=0.01)
+    assert row is not None
+    assert row["rsi"] == 100
+    assert row["cleared"] is False
     assert review(pd.Series([100.0] * 20), cost_share=0.01) is None
 
 

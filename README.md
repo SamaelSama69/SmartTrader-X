@@ -1,142 +1,68 @@
-# SmartTrader Pro 🇮🇳
+# SmartTrader Pro
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**SmartTrader Pro** is an autonomous, production-grade algorithmic trading platform specifically hardened for the Indian Equity Markets (NSE/BSE).
+An Indian-market desk for the NSE and BSE. It turns capital, risk, and a time horizon into a sized book, prices the round trip on Zerodha, Groww, Upstox, Angel One, and Shoonya, and keeps a local record of who holds what. A research screen. It does not promise a profit, and the recommendation pages do not place an order.
 
-Powered by advanced regime-aware momentum strategies, dynamic position sizing (Kelly Criterion), and multi-tiered sentiment analysis, SmartTrader Pro seamlessly moves from research to real-time execution via the Shoonya API.
+<p align="center">
+  <img src="assets/readme/tour.gif" alt="SmartTrader Pro moving through the home page, the book, the chart, the cost card, and the holdings" width="100%">
+</p>
 
----
+The shots below are the sample market, so the desk opens with no broker login. Live NSE prices are a checkbox.
 
-## 🚀 Features
+| Home | Book |
+| --- | --- |
+| <img src="assets/readme/home.png" alt="Session clock, holdings mix, and a watchlist" width="100%"> | <img src="assets/readme/book.png" alt="A sized book in a bull trend, with one name avoided" width="100%"> |
 
-*   **Regime-Aware Trading:** Automatically adapts trading parameters based on current market conditions (Bull/Bear, High/Low Volatility) using standard deviation and moving average metrics.
-*   **Dynamic Risk Management:** Automatically calculates position sizes using a robust Dynamic Kelly Criterion implementation.
-*   **Circuit Breaker Protection:** Incorporates mandatory pre-flight circuit breaker checks, preventing order placements if a stock is trading within 0.5% of its circuit limits.
-*   **Sentiment Failover Engine:** Tri-layer NLP sentiment analysis pipeline using News API, local FinBERT, and keyword fallback parsing.
-*   **Earnings & Holiday Safety:** Detects NSE trading holidays and automatically scales down position sizes by 20% during earnings seasons to protect against unpredictable gap volatility.
-*   **Fully Autonomous AutoBot:** A background trading engine that manages entry/exit conditions, performs EOD square-offs by 3:15 PM IST for intraday strategies, and continuously monitors live portfolio PnL.
-*   **Interactive Dashboard:** A responsive Streamlit-based UI that provides a live Strategy Scanner, Backtesting Lab, and real-time Shoonya order tracking.
-*   **Recommendation Book:** Turns capital, risk, and horizon into a sized trading sleeve and a longer investment sleeve. The first dashboard page builds the book. It does not send an order.
-*   **Live Desk:** Candles, moving averages, RSI, and MACD for a name, plus a screen that only flags a setup when the recent swing is larger than a round trip on Zerodha, Groww, Upstox, Angel One, or Shoonya. A flag is not a promised profit.
-*   **Platform Costs:** Delivery and intraday charges, the smallest ticket that keeps those charges under a limit you set, and direct-plan mutual fund minimums with exit load and expense ratio.
-*   **Holdings:** A local book of who holds which share or fund on which platform, with a mark, an open result, and the cost of selling. The file stays on this machine.
-*   **Home:** The NSE cash session, the mix of the holdings book, and a watchlist that flags a price above or below a level you set. Bollinger bands and average true range sit on the live chart. A fired alert is not an order.
+| Chart | What the platforms charge |
+| --- | --- |
+| <img src="assets/readme/desk.png" alt="Candles with moving averages, Bollinger bands, RSI, and MACD" width="100%"> | <img src="assets/readme/costs.png" alt="Delivery costs on a one lakh ticket across five brokers" width="100%"> |
 
----
+<img src="assets/readme/holdings.png" alt="Holdings across Zerodha, Groww, and Angel One, with the cost of selling" width="80%">
 
-## 📁 Repository Structure
+## What a recruiter can see in the code
 
-The project has been organized to keep the root directory clean while providing extensive documentation and scripts.
+* **A book, not a tip.** Capital, risk, and horizon become share counts, a stop, a target, and the cash left over. One name per sector when the book has room. A falling market raises cash.
+* **Indian costs, not a flat fee.** Delivery and intraday on five brokers, including STT, stamp duty, the exchange fee, GST, and the DP charge on a sell. The page also shows the smallest ticket that keeps those charges under a limit, and the SIP floor on a direct-plan mutual fund.
+* **A chart that knows the cost.** Candles, two moving averages, Bollinger bands, RSI, MACD, and the 14-session average true range. A name is flagged only when the recent swing is larger than the round trip. The flag is a screen.
+* **A book of holders.** Shares and mutual funds, tagged by person and platform, with the open result and the cost of leaving. The file stays on the machine.
+* **A local model, if you have one.** An optional note beside the book. The share count is already decided. No model is required to run the desk.
+* **Tests around the money.** The book, the brokerage cards, the session clock, and the model parser are covered. A refused model reply cannot change a position.
 
-```text
-SmartTrader/
-├── docs/                      # Comprehensive Guides & Documentation
-│   ├── AUTO_TRADING_GUIDE.md  # AutoBot configuration and operations
-│   ├── BEGINNER_API_SETUP.md  # How to obtain API keys (Shoonya, News, etc.)
-│   ├── COMPREHENSIVE_GUIDE.md # Deep dive into the architecture
-│   ├── EXAMPLES.md            # Strategy code examples
-│   └── INDIAN_TRADING_GUIDE.md# Indian Market specific rules (STT, Slippage)
-├── scripts/                   # Helper scripts
-│   ├── run_autobot.bat        # Launch the autonomous bot
-│   ├── run_gui.bat            # Launch the Streamlit dashboard
-│   └── run_sentiment_server.bat # Launch local FinBERT server
-├── strategies/                # Core trading algorithms
-├── utils/                     # Modules: Risk, Broker, Fetchers, Backtester
-├── run.bat                    # Master entry point script
-├── auto_bot.py                # Main headless trading loop
-├── dashboard_v2.py            # Streamlit dashboard interface
-└── config.py                  # Environment config
-```
+The same repository also has the older trading loop: regime detection, Kelly sizing, a paper book, and a Shoonya connection for someone who wants to go from research toward execution. That path is separate from the recommendation pages.
 
----
+## Stack
 
-## 🛠️ Quick Start
+Python 3.10, pandas, NumPy, Streamlit, Plotly, and pytest. Prices can come from Yahoo Finance. Sentiment can come from a local FinBERT server. Neither is required for the sample market.
 
-### 1. Requirements
-
-*   **Python 3.10+**
-*   API Keys (Optional but recommended for live trading): Shoonya Broker, NewsAPI, Finnhub.
-
-### 2. Installation
-
-Clone the repository and install dependencies:
+## Run it
 
 ```bash
 git clone https://github.com/SamaelSama69/SmartTrader-X.git
 cd SmartTrader-X
-
-# Create and activate a virtual environment
 python -m venv venv
-venv\Scripts\activate  # Windows
-
-# Install core and ML dependencies
+venv\Scripts\activate
 pip install -r requirements.txt
-pip install -r requirements-ml.txt
-```
 
-### 3. Configuration
+# The desk
+python -m streamlit run dashboard_v2.py
 
-Rename `.env.example` to `.env` and fill in your credentials.
-
-```env
-# Required for Live Execution
-SHOONYA_USER_ID=your_id
-SHOONYA_PASSWORD=your_password
-SHOONYA_TOTP_KEY=your_totp_secret
-SHOONYA_VENDOR_CODE=your_vendor_code
-SHOONYA_API_KEY=your_api_key
-
-# Required for Sentiment
-NEWS_API_KEY=your_news_key
-FINNHUB_API_KEY=your_finnhub_key
-```
-
-### 4. Running the Platform
-
-Use the master script `run.bat` to launch the platform:
-
-```bash
-# Launch the main Streamlit Dashboard
-run.bat
-
-# Build a recommendation book without live prices
+# A book from the sample market, no network and no model
 python -m recommender --demo --capital 500000 --risk balanced --horizon both
 
-# Build the same book from live NSE large-cap prices
-python -m recommender --capital 500000 --risk balanced --horizon investment
-
-# Alternatively, launch components via the scripts directory:
-scripts\run_gui.bat
-scripts\run_autobot.bat
-scripts\run_sentiment_server.bat
+pytest tests/ -q
 ```
 
----
+Copy `.env.example` to `.env` only when you want a broker, a news key, or the optional local model. Blank is a working default.
 
-## 📚 Documentation
+## More writing
 
-Detailed documentation is available in the `docs/` folder:
+* [Indian Market Guide](docs/INDIAN_TRADING_GUIDE.md)
+* [Beginner API Setup](docs/BEGINNER_API_SETUP.md)
+* [Auto-Trading Guide](docs/AUTO_TRADING_GUIDE.md)
+* [System Architecture](docs/COMPREHENSIVE_GUIDE.md)
 
-*   [Beginner API Setup](docs/BEGINNER_API_SETUP.md) — Step-by-step API integration.
-*   [Indian Market Guide](docs/INDIAN_TRADING_GUIDE.md) — Slippage modeling, STT, and costs.
-*   [Auto-Trading Guide](docs/AUTO_TRADING_GUIDE.md) — Operating the headless AutoBot.
-*   [System Architecture](docs/COMPREHENSIVE_GUIDE.md) — Complete overview of engine logic.
+## Disclaimer
 
----
-
-## 🧪 Testing
-
-The repository maintains an extensive test suite ensuring mission-critical paths (circuit breakers, regime logic, dynamic Kelly) are stable.
-
-```bash
-# Run all tests
-pytest tests/ -v
-```
-
----
-
-## 🛡️ Disclaimer
-**For Educational and Research Purposes Only.**
-Algorithmic trading involves significant risk. The authors and contributors are not responsible for any financial losses incurred through the use of this software. Always test strategies thoroughly in the **Testing Lab** before deploying live capital.
+Educational and research software. Markets can fall by more than any fee schedule. Nothing in this repository is a recommendation to buy or sell a security.
