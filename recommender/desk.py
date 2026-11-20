@@ -16,14 +16,108 @@ from plotly.subplots import make_subplots
 from recommender.costs import BROKERS, SCHEDULE_AS_OF, compare, minimum_ticket, quote
 from recommender.data import DEFAULT_UNIVERSE, as_ohlcv, demo_frames, fetch_closes, fetch_history
 from recommender.funds import SCHEMES, fee_hurdle, fetch_nav, fund_exit
-from recommender.indicators import review
+from recommender.indicators import atr, bollinger, review
 from recommender.ledger import Holding, load_book, sample_book, save_book
+from recommender.market_clock import session
+from recommender.performance import summarize
+from recommender.watch import Watch, load_watch, save_watch
 
 BOOK_PATH = Path("output") / "holdings.json"
+WATCH_PATH = Path("output") / "watchlist.json"
 DISCLAIMER = (
     "Research screen only. Costs are a working schedule, not a broker contract. "
     "No ticket size and no indicator makes a profit certain. This page does not place an order."
 )
+
+
+def render_home() -> None:
+    st.subheader("Home")
+    st.caption(DISCLAIMER)
+    clock = session()
+    if clock["state"] == "open":
+        st.success(f"NSE cash session is open. {clock['as_of']}. {clock['reason']}.")
+    elif clock["state"] == "holiday":
+        st.warning(f"NSE is shut for a holiday. {clock['as_of']}.")
+    else:
+        st.info(f"NSE cash session is closed. {clock['as_of']}. {clock['reason']}.")
+
+    holdings = load_book(BOOK_PATH)
+    if holdings:
+        marks = _marks(holdings, use_live=False)
+        rows = []
+        for item in holdings:
+            mark = marks.get((item.kind, item.symbol), item.average_price)
+            value = item.market_value(mark)
+            rows.append(
+                {
+                    "name": item.name,
+                    "platform": _platform_name(item.platform),
+                    "kind": item.kind,
+                    "invested": item.invested(),
+                    "value": value,
+                    "exit": _exit_cost(item, value, True),
+                }
+            )
+        report = summarize(rows)
+        invested, marked, result, top = st.columns(4)
+        invested.metric("Invested", f"INR {report['invested']:,.0f}")
+        marked.metric("Marked value", f"INR {report['value']:,.0f}")
+        result.metric("Open result", f"INR {report['pnl']:,.0f}", f"{report['return']:.1%}")
+        top.metric("Largest line", report["top_name"] or "—", f"{report['top_weight']:.0%}")
+        if report["top_weight"] >= 0.25:
+            st.warning(
+                f"{report['top_name']} is {report['top_weight']:.0%} of the marked book. "
+                "A book this concentrated moves with one name. The exit cost of that line is in the table."
+            )
+        table = pd.DataFrame(report["lines"])
+        table["weight"] = table["weight"].map(lambda weight: f"{weight:.0%}")
+        st.dataframe(table, hide_index=True, width="stretch")
+        st.caption("Marks on this page use the sample prices unless you open Holdings and turn live marks on. The mix is the point.")
+    else:
+        st.info("The holdings book is empty. Add a line on Holdings, or load the sample there, and the mix shows up here.")
+
+    st.subheader("Watchlist")
+    st.caption("A price above or below is checked when this page opens. It is not an order and it is not emailed.")
+    if "watch" not in st.session_state:
+        st.session_state.watch = load_watch(WATCH_PATH)
+    with st.form("add_watch"):
+        symbol, above, below = st.columns(3)
+        with symbol:
+            ticker = st.text_input("Symbol", value="RELIANCE")
+        with above:
+            high = st.number_input("Alert if at or above", min_value=0.0, value=0.0, step=1.0)
+        with below:
+            low = st.number_input("Alert if at or below", min_value=0.0, value=0.0, step=1.0)
+        submitted = st.form_submit_button("Add to watch", type="primary")
+    rows = list(st.session_state.watch)
+    if submitted:
+        try:
+            rows.append(Watch(ticker, above=high or None, below=low or None))
+            _store_watch(rows)
+        except ValueError as exc:
+            st.error(str(exc))
+    if not rows:
+        return
+    prices = _watch_prices([item.symbol for item in rows])
+    board = []
+    for item in rows:
+        price = prices.get(item.symbol)
+        board.append(
+            {
+                "Symbol": item.symbol,
+                "Last": "" if price is None else round(price, 2),
+                "Above": item.above if item.above is not None else "",
+                "Below": item.below if item.below is not None else "",
+                "Alert": "no mark" if price is None else item.status(price),
+            }
+        )
+    st.dataframe(pd.DataFrame(board), hide_index=True, width="stretch")
+    labels = [item.symbol for item in rows]
+    drop = st.selectbox("Remove from watch", labels)
+    if st.button("Remove watch"):
+        rows.pop(labels.index(drop))
+        _store_watch(rows)
+        st.rerun()
 
 
 def render_live_desk() -> None:
@@ -63,6 +157,9 @@ def render_live_desk() -> None:
 
     _metrics(reading, trip)
     st.plotly_chart(_chart(candles, reading), width="stretch")
+    last_range = atr(candles).dropna()
+    if not last_range.empty:
+        st.caption(f"Average true range, 14 sessions: {float(last_range.iloc[-1]):.2f}. That is how far a typical day has been moving, not a target.")
     if reading["cleared"]:
         st.success(reading["note"])
     else:
@@ -299,6 +396,9 @@ def _chart(frame: pd.DataFrame, reading: dict) -> go.Figure:
     )
     figure.add_trace(go.Scatter(x=frame.index, y=reading["sma20_series"], name="SMA 20", line=dict(color="#00D1FF", width=1)), row=1, col=1)
     figure.add_trace(go.Scatter(x=frame.index, y=reading["sma50_series"], name="SMA 50", line=dict(color="#FFA500", width=1)), row=1, col=1)
+    bands = bollinger(frame["Close"])
+    figure.add_trace(go.Scatter(x=frame.index, y=bands["upper"], name="Bollinger upper", line=dict(color="#8899aa", width=1, dash="dot")), row=1, col=1)
+    figure.add_trace(go.Scatter(x=frame.index, y=bands["lower"], name="Bollinger lower", line=dict(color="#8899aa", width=1, dash="dot")), row=1, col=1)
     if "Volume" in frame.columns:
         figure.add_trace(go.Bar(x=frame.index, y=frame["Volume"], name="Volume", marker_color="#445"), row=2, col=1)
     figure.add_trace(go.Scatter(x=frame.index, y=reading["rsi_series"], name="RSI", line=dict(color="#00FFA3", width=1)), row=3, col=1)
@@ -362,6 +462,16 @@ def _exit_cost(item: Holding, value: float, inside_load: bool) -> float:
     if item.platform not in BROKERS:
         return 0.0
     return quote(item.platform, value).side_total("sell")
+
+
+def _watch_prices(symbols: list[str]) -> dict[str, float]:
+    sample = {key: float(frame["Close"].iloc[-1]) for key, frame in demo_frames().items()}
+    return {symbol: sample[symbol] for symbol in symbols if symbol in sample}
+
+
+def _store_watch(rows: list[Watch]) -> None:
+    st.session_state.watch = rows
+    save_watch(WATCH_PATH, rows)
 
 
 def _store(holdings: list[Holding]) -> None:

@@ -22,6 +22,7 @@ Powered by advanced regime-aware momentum strategies, dynamic position sizing (K
 *   **Live Desk:** Candles, moving averages, RSI, and MACD for a name, plus a screen that only flags a setup when the recent swing is larger than a round trip on Zerodha, Groww, Upstox, Angel One, or Shoonya. A flag is not a promised profit.
 *   **Platform Costs:** Delivery and intraday charges, the smallest ticket that keeps those charges under a limit you set, and direct-plan mutual fund minimums with exit load and expense ratio.
 *   **Holdings:** A local book of who holds which share or fund on which platform, with a mark, an open result, and the cost of selling. The file stays on this machine.
+*   **Home:** The NSE cash session, the mix of the holdings book, and a watchlist that flags a price above or below a level you set. Bollinger bands and average true range sit on the live chart. A fired alert is not an order.
 
 ---
 
