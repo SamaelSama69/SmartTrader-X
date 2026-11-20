@@ -55,6 +55,27 @@ def review(close: pd.Series, cost_share: float) -> dict | None:
     }
 
 
+def bollinger(close: pd.Series, window: int = 20, width: float = 2.0) -> pd.DataFrame:
+    """Middle, upper, and lower band. Needs `window` closes before the band is defined."""
+    middle = close.rolling(window).mean()
+    spread = close.rolling(window).std()
+    return pd.DataFrame(
+        {"middle": middle, "upper": middle + width * spread, "lower": middle - width * spread},
+        index=close.index,
+    )
+
+
+def atr(frame: pd.DataFrame, window: int = 14) -> pd.Series:
+    """Average true range from high, low, and close."""
+    if not {"High", "Low", "Close"}.issubset(frame.columns):
+        return pd.Series(index=frame.index, dtype=float)
+    high = frame["High"]
+    low = frame["Low"]
+    prev = frame["Close"].shift(1)
+    true_range = pd.concat([(high - low), (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    return true_range.rolling(window).mean()
+
+
 def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
     delta = close.diff()
     gain = delta.clip(lower=0)
